@@ -11,26 +11,34 @@ import (
 )
 
 type ServiceConfig struct {
-	Backend          Backend
-	RequestQueueSize int
+	Backend             Backend
+	RequestQueueSize    *int
+	RequestQueueTimeout *time.Duration
 	// TODO(sean) make queue size part of config
 }
 
 // Service keeps the service configuration for the SDR API service.
 type Service struct {
-	backend      Backend
-	requestQueue chan struct{}
+	backend             Backend
+	requestQueue        chan struct{}
+	requestQueueTimeout time.Duration
 }
 
 func NewService(config *ServiceConfig) *Service {
-	requestQueueSize := config.RequestQueueSize
-	if requestQueueSize <= 0 {
-		requestQueueSize = 10
+	requestQueueSize := 10
+	if config.RequestQueueSize != nil {
+		requestQueueSize = *config.RequestQueueSize
+	}
+
+	requestQueueTimeout := 10 * time.Second
+	if config.RequestQueueTimeout != nil {
+		requestQueueTimeout = *config.RequestQueueTimeout
 	}
 
 	return &Service{
-		backend:      config.Backend,
-		requestQueue: make(chan struct{}, requestQueueSize),
+		backend:             config.Backend,
+		requestQueue:        make(chan struct{}, requestQueueSize),
+		requestQueueTimeout: requestQueueTimeout,
 	}
 }
 
@@ -38,7 +46,7 @@ func (svc *Service) enterRequestQueue() bool {
 	select {
 	case svc.requestQueue <- struct{}{}:
 		return true
-	case <-time.After(10 * time.Second):
+	case <-time.After(svc.requestQueueTimeout):
 	}
 	return false
 }
