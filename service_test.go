@@ -5,11 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 )
@@ -58,9 +56,7 @@ func TestQueryResponse(t *testing.T) {
 	svc.ServeHTTP(w, r)
 	resp := w.Result()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected status ok. got %d", resp.StatusCode)
-	}
+	assertStatusCode(t, resp, http.StatusOK)
 
 	scanner := bufio.NewScanner(resp.Body)
 
@@ -94,19 +90,9 @@ func TestQueryDisallowedField(t *testing.T) {
 	svc.ServeHTTP(w, r)
 	resp := w.Result()
 
-	b, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response")
-	}
-
-	if !strings.Contains(string(b), `json: unknown field "filters"`) {
-		t.Fatalf("expected json error message. got %s.", string(b))
-	}
-
-	expectStatus := http.StatusBadRequest
-	if resp.StatusCode != expectStatus {
-		t.Fatalf("expected status %d. got %d", expectStatus, resp.StatusCode)
-	}
+	assertStatusCode(t, resp, http.StatusBadRequest)
+	assertReadBody(t, resp, []byte(`error: failed to parse query: json: unknown field "filters"
+`))
 }
 
 func TestContentDispositionHeader(t *testing.T) {
@@ -132,6 +118,23 @@ func TestContentDispositionHeader(t *testing.T) {
 	}
 }
 
+func TestBadMeta(t *testing.T) {
+	svc := &Service{
+		Backend: &DummyBackend{},
+	}
+
+	r := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{
+		"start": "-4h", "filter": {"meta.vsn":"123"}
+	}`))
+
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, r)
+	resp := w.Result()
+
+	assertStatusCode(t, resp, http.StatusInternalServerError)
+	assertReadBody(t, resp, []byte("error: must provide a request body\n"))
+}
+
 func TestNoPayload(t *testing.T) {
 	svc := &Service{
 		Backend: &DummyBackend{},
@@ -142,11 +145,23 @@ func TestNoPayload(t *testing.T) {
 	svc.ServeHTTP(w, r)
 	resp := w.Result()
 
+	assertStatusCode(t, resp, http.StatusBadRequest)
+	assertReadBody(t, resp, []byte(`error: must provide a request body
+`))
+}
+
+func assertStatusCode(t *testing.T, resp *http.Response, want int) {
+	if resp.StatusCode != want {
+		t.Fatalf("invalid status code. want: %d got: %d", want, resp.StatusCode)
+	}
+}
+
+func assertReadBody(t *testing.T, resp *http.Response, want []byte) {
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != "error: must provide a request body\n" {
-		t.Fatalf("missing error message when missing request body")
+	if !bytes.Equal(want, b) {
+		t.Fatalf("invalid body. want: %q got: %q", want, b)
 	}
 }

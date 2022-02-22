@@ -33,7 +33,7 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	results, err := svc.Backend.Query(r.Context(), query)
 	if err != nil {
 		log.Printf("error: failed to query backend: %s", err.Error())
-		http.Error(w, "error: failed to query backend", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 	defer results.Close()
