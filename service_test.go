@@ -43,9 +43,9 @@ func TestQueryResponse(t *testing.T) {
 		},
 	}
 
-	svc := &Service{
+	svc := NewService(&ServiceConfig{
 		Backend: &DummyBackend{records},
-	}
+	})
 
 	body := bytes.NewBufferString(`{
 		"start": "-4h"
@@ -95,9 +95,9 @@ func TestValidQuery(t *testing.T) {
 		"BadJSON":        {`{"start": "-4h",}`, false, "error: failed to parse query: invalid character '}' looking for beginning of object key string\n"},
 	}
 
-	svc := &Service{
+	svc := NewService(&ServiceConfig{
 		Backend: &DummyBackend{},
-	}
+	})
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
@@ -117,9 +117,9 @@ func TestValidQuery(t *testing.T) {
 }
 
 func TestContentDispositionHeader(t *testing.T) {
-	svc := &Service{
+	svc := NewService(&ServiceConfig{
 		Backend: &DummyBackend{},
-	}
+	})
 
 	body := bytes.NewBufferString(`{
 		"start": "-4h"

@@ -28,7 +28,7 @@ func main() {
 	// NOTE temporarily redirecting to sage docs. can change to something better later.
 	http.Handle("/", http.RedirectHandler("https://docs.sagecontinuum.org/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
 
-	http.Handle("/api/v1/query", &Service{
+	svc := NewService(&ServiceConfig{
 		Backend: &InfluxBackend{
 			Client: client,
 			Org:    "waggle",
@@ -36,14 +36,7 @@ func main() {
 		},
 	})
 
-	// NOTE optional endpoint to expose testing bucket
-	// http.Handle("/api/testing/query", &Service{
-	// 	Backend: &InfluxBackend{
-	// 		Client: client,
-	// 		Org:    "waggle",
-	// 		Bucket: "testing",
-	// 	},
-	// })
+	http.Handle("/api/v1/query", svc)
 
 	log.Printf("service listening on %s", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {

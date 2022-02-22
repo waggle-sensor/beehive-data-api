@@ -10,14 +10,38 @@ import (
 	"time"
 )
 
+type ServiceConfig struct {
+	Backend Backend
+	// TODO(sean) make queue size part of config
+}
+
 // Service keeps the service configuration for the SDR API service.
 type Service struct {
-	Backend Backend
+	backend      Backend
+	requestQueue chan struct{}
+}
+
+func NewService(config *ServiceConfig) *Service {
+	return &Service{
+		backend:      config.Backend,
+		requestQueue: make(chan struct{}, 10),
+	}
 }
 
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// wait for availability in request queue
+	select {
+	case svc.requestQueue <- struct{}{}:
+	case <-time.After(10 * time.Second):
+		http.Error(w, "error: service unavailable. too many active requests.", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() {
+		<-svc.requestQueue
+	}()
+
 	query, err := parseQuery(r.Body)
 	if err == io.EOF {
 		http.Error(w, "error: must provide a request body", http.StatusBadRequest)
@@ -31,7 +55,7 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	queryStart := time.Now()
 	queryCount := 0
 
-	results, err := svc.Backend.Query(r.Context(), query)
+	results, err := svc.backend.Query(r.Context(), query)
 	if err != nil {
 		log.Printf("error: failed to query backend: %s", err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
