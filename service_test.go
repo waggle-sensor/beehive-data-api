@@ -79,14 +79,20 @@ func TestValidQuery(t *testing.T) {
 		valid bool
 		resp  string
 	}{
-		"Valid1":        {`{"start": "-4h"}`, true, ""},
-		"Valid2":        {`{"start": "-4h", "filter": {"node": "node123", "vsn": "W123"}}`, true, ""},
-		"Empty":         {``, false, "error: must provide a request body\n"},
-		"NoStart":       {`{}`, false, "error: failed to parse query: missing start field\n"},
-		"BadFilterChar": {`{"start": "-4h", "filter": {"meta.vsn": "W123"}}`, false, "error: failed to parse query: invalid filter key: \"meta.vsn\"\n"},
-		"BadField":      {`{"start": "-4h", "unknown": "val"}`, false, "error: failed to parse query: json: unknown field \"unknown\"\n"},
-		"EOF":           {`{"start": "-4h",`, false, "error: failed to parse query: unexpected EOF\n"},
-		"BadJSON":       {`{"start": "-4h",}`, false, "error: failed to parse query: invalid character '}' looking for beginning of object key string\n"},
+		"Valid1":         {`{"start": "-4h"}`, true, ""},
+		"Valid2":         {`{"start": "-4h", "filter": {"node": "node123", "vsn": "W123"}}`, true, ""},
+		"Empty":          {``, false, "error: must provide a request body\n"},
+		"NoStart":        {`{}`, false, "error: failed to parse query: missing start field\n"},
+		"GoodFilterKey1": {`{"start": "-4h", "filter": {"meta": "W123"}}`, true, ""},
+		"GoodFilterKey2": {`{"start": "-4h", "filter": {"meta_tag": "W123"}}`, true, ""},
+		"GoodFilterKey3": {`{"start": "-4h", "filter": {"meta2": "W123"}}`, true, ""},
+		"GoodFilterKey4": {`{"start": "-4h", "filter": {"_meta": "W123"}}`, true, ""},
+		"BadFilterKey1":  {`{"start": "-4h", "filter": {"meta.vsn": "W123"}}`, false, "error: failed to parse query: invalid filter key: \"meta.vsn\"\n"},
+		"BadFilterKey2":  {`{"start": "-4h", "filter": {"meta-vsn": "W123"}}`, false, "error: failed to parse query: invalid filter key: \"meta-vsn\"\n"},
+		"BadFilterKey3":  {`{"start": "-4h", "filter": {"1meta": "W123"}}`, false, "error: failed to parse query: invalid filter key: \"1meta\"\n"},
+		"BadField":       {`{"start": "-4h", "unknown": "val"}`, false, "error: failed to parse query: json: unknown field \"unknown\"\n"},
+		"EOF":            {`{"start": "-4h",`, false, "error: failed to parse query: unexpected EOF\n"},
+		"BadJSON":        {`{"start": "-4h",}`, false, "error: failed to parse query: invalid character '}' looking for beginning of object key string\n"},
 	}
 
 	svc := &Service{
