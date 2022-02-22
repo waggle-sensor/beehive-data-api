@@ -73,26 +73,41 @@ func TestQueryResponse(t *testing.T) {
 	}
 }
 
-func TestQueryDisallowedField(t *testing.T) {
+func TestValidQuery(t *testing.T) {
+	testcases := map[string]struct {
+		body  string
+		valid bool
+		resp  string
+	}{
+		"Valid1":        {`{"start": "-4h"}`, true, ""},
+		"Valid2":        {`{"start": "-4h", "filter": {"node": "node123", "vsn": "W123"}}`, true, ""},
+		"Empty":         {``, false, "error: must provide a request body\n"},
+		"NoStart":       {`{}`, false, "error: failed to parse query: missing start field\n"},
+		"BadFilterChar": {`{"start": "-4h", "filter": {"meta.vsn": "W123"}}`, false, "error: failed to parse query: invalid filter key: \"meta.vsn\"\n"},
+		"BadField":      {`{"start": "-4h", "unknown": "val"}`, false, "error: failed to parse query: json: unknown field \"unknown\"\n"},
+		"EOF":           {`{"start": "-4h",`, false, "error: failed to parse query: unexpected EOF\n"},
+		"BadJSON":       {`{"start": "-4h",}`, false, "error: failed to parse query: invalid character '}' looking for beginning of object key string\n"},
+	}
+
 	svc := &Service{
 		Backend: &DummyBackend{},
 	}
 
-	body := bytes.NewBufferString(`{
-		"start": "-4h",
-		"filters": {
-			"node": "node123"
-		}
-	}`)
+	for name, tc := range testcases {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/", bytes.NewBufferString(tc.body))
+			w := httptest.NewRecorder()
+			svc.ServeHTTP(w, r)
+			resp := w.Result()
 
-	r := httptest.NewRequest("POST", "/", body)
-	w := httptest.NewRecorder()
-	svc.ServeHTTP(w, r)
-	resp := w.Result()
-
-	assertStatusCode(t, resp, http.StatusBadRequest)
-	assertReadBody(t, resp, []byte(`error: failed to parse query: json: unknown field "filters"
-`))
+			if tc.valid {
+				assertStatusCode(t, resp, http.StatusOK)
+			} else {
+				assertStatusCode(t, resp, http.StatusBadRequest)
+			}
+			assertReadBody(t, resp, []byte(tc.resp))
+		})
+	}
 }
 
 func TestContentDispositionHeader(t *testing.T) {
@@ -116,38 +131,6 @@ func TestContentDispositionHeader(t *testing.T) {
 	if !pattern.MatchString(s) {
 		t.Fatalf("response must proper Content-Disposition header. got %q", s)
 	}
-}
-
-func TestBadMeta(t *testing.T) {
-	svc := &Service{
-		Backend: &DummyBackend{},
-	}
-
-	r := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{
-		"start": "-4h", "filter": {"meta.vsn":"123"}
-	}`))
-
-	w := httptest.NewRecorder()
-	svc.ServeHTTP(w, r)
-	resp := w.Result()
-
-	assertStatusCode(t, resp, http.StatusInternalServerError)
-	assertReadBody(t, resp, []byte("error: must provide a request body\n"))
-}
-
-func TestNoPayload(t *testing.T) {
-	svc := &Service{
-		Backend: &DummyBackend{},
-	}
-
-	r := httptest.NewRequest("POST", "/", nil)
-	w := httptest.NewRecorder()
-	svc.ServeHTTP(w, r)
-	resp := w.Result()
-
-	assertStatusCode(t, resp, http.StatusBadRequest)
-	assertReadBody(t, resp, []byte(`error: must provide a request body
-`))
 }
 
 func assertStatusCode(t *testing.T, resp *http.Response, want int) {

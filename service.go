@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -57,12 +58,22 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("served %d records in %s - %f records/s", queryCount, queryDuration, float64(queryCount)/queryDuration.Seconds())
 }
 
+var metaRE = regexp.MustCompile("^[a-zA-Z0-9_-]+$")
+
 func parseQuery(r io.Reader) (*Query, error) {
 	decoder := json.NewDecoder(r)
 	decoder.DisallowUnknownFields()
 	query := &Query{}
 	if err := decoder.Decode(query); err != nil {
 		return nil, err
+	}
+	if query.Start == "" {
+		return nil, fmt.Errorf("missing start field")
+	}
+	for k := range query.Filter {
+		if !metaRE.MatchString(k) {
+			return nil, fmt.Errorf("invalid filter key: %q", k)
+		}
 	}
 	return query, nil
 }
