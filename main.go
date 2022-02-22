@@ -12,6 +12,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":10000", "service addr")
+	requestQueueSize := flag.Int("request-queue-size", 10, "service request queue size")
 	influxdbURL := flag.String("influxdb.url", getenv("INFLUXDB_URL", "http://localhost:8086"), "influxdb url")
 	influxdbToken := flag.String("influxdb.token", getenv("INFLUXDB_TOKEN", ""), "influxdb token")
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
@@ -34,11 +35,13 @@ func main() {
 			Org:    "waggle",
 			Bucket: *influxdbBucket,
 		},
+		RequestQueueSize: *requestQueueSize,
 	})
 
 	http.Handle("/api/v1/query", svc)
 
 	log.Printf("service listening on %s", *addr)
+	log.Printf("request queue size is %d", *requestQueueSize)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
 	}

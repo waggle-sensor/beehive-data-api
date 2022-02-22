@@ -11,7 +11,8 @@ import (
 )
 
 type ServiceConfig struct {
-	Backend Backend
+	Backend          Backend
+	RequestQueueSize int
 	// TODO(sean) make queue size part of config
 }
 
@@ -22,25 +23,38 @@ type Service struct {
 }
 
 func NewService(config *ServiceConfig) *Service {
+	requestQueueSize := config.RequestQueueSize
+	if requestQueueSize <= 0 {
+		requestQueueSize = 10
+	}
+
 	return &Service{
 		backend:      config.Backend,
-		requestQueue: make(chan struct{}, 10),
+		requestQueue: make(chan struct{}, requestQueueSize),
 	}
+}
+
+func (svc *Service) enterRequestQueue() bool {
+	select {
+	case svc.requestQueue <- struct{}{}:
+		return true
+	case <-time.After(10 * time.Second):
+	}
+	return false
+}
+
+func (svc *Service) leaveRequestQueue() {
+	<-svc.requestQueue
 }
 
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// wait for availability in request queue
-	select {
-	case svc.requestQueue <- struct{}{}:
-	case <-time.After(10 * time.Second):
+	if !svc.enterRequestQueue() {
 		http.Error(w, "error: service unavailable. too many active requests.", http.StatusServiceUnavailable)
 		return
 	}
-	defer func() {
-		<-svc.requestQueue
-	}()
+	defer svc.leaveRequestQueue()
 
 	query, err := parseQuery(r.Body)
 	if err == io.EOF {
