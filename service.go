@@ -44,43 +44,45 @@ func NewService(config *ServiceConfig) *Service {
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s request queued", r.RemoteAddr)
+	remoteAddr := getRemoteAddr(r)
+
+	log.Printf("%s request queued", remoteAddr)
 	if !svc.requestQueue.Enter() {
-		log.Printf("%s error: request queue timeout", r.RemoteAddr)
+		log.Printf("%s error: request queue timeout", remoteAddr)
 		http.Error(w, "error: request queue timeout", http.StatusServiceUnavailable)
 		return
 	}
 	defer svc.requestQueue.Leave()
-	log.Printf("%s serving request", r.RemoteAddr)
+	log.Printf("%s serving request", remoteAddr)
 
 	queryBody, err := io.ReadAll(r.Body)
 	if err == io.EOF || len(queryBody) == 0 {
-		log.Printf("%s error: no query provided", r.RemoteAddr)
+		log.Printf("%s error: no query provided", remoteAddr)
 		http.Error(w, "error: no query provided", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		log.Printf("%s error: failed to read query body: %s", r.RemoteAddr, err.Error())
+		log.Printf("%s error: failed to read query body: %s", remoteAddr, err.Error())
 		http.Error(w, "error: failed to read query body", http.StatusBadRequest)
 		return
 	}
 
 	query, err := parseQuery(queryBody)
 	if err != nil {
-		log.Printf("%s error: failed to parse query: %s", r.RemoteAddr, err.Error())
+		log.Printf("%s error: failed to parse query: %s", remoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to parse query: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 	r.Body.Close()
 
-	log.Printf("%s query: %q", r.RemoteAddr, queryBody)
+	log.Printf("%s query: %q", remoteAddr, queryBody)
 
 	queryStart := time.Now()
 	queryCount := 0
 
 	results, err := svc.backend.Query(r.Context(), query)
 	if err != nil {
-		log.Printf("%s error: failed to query backend: %s", r.RemoteAddr, err.Error())
+		log.Printf("%s error: failed to query backend: %s", remoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -98,11 +100,11 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := results.Err(); err != nil {
-		log.Printf("%s error: %s", r.RemoteAddr, err)
+		log.Printf("%s error: %s", remoteAddr, err)
 	}
 
 	queryDuration := time.Since(queryStart)
-	log.Printf("%s served %d records in %s - %f records/s", r.RemoteAddr, queryCount, queryDuration, float64(queryCount)/queryDuration.Seconds())
+	log.Printf("%s served %d records in %s - %f records/s", remoteAddr, queryCount, queryDuration, float64(queryCount)/queryDuration.Seconds())
 }
 
 var metaRE = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -132,4 +134,14 @@ func writeRecord(w io.Writer, rec *Record) error {
 func writeContentDispositionHeader(w http.ResponseWriter) {
 	filename := time.Now().Format("sage-download-20060102150405.ndjson")
 	w.Header().Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+}
+
+func getRemoteAddr(r *http.Request) string {
+	// if reverse proxy provides a remote address, use that
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		return forwardedFor
+	}
+	// otherwise, fallback to built-in remote address
+	return r.RemoteAddr
 }
