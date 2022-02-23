@@ -81,7 +81,7 @@ func TestValidQuery(t *testing.T) {
 	}{
 		"Valid1":         {`{"start": "-4h"}`, true, ""},
 		"Valid2":         {`{"start": "-4h", "filter": {"node": "node123", "vsn": "W123"}}`, true, ""},
-		"Empty":          {``, false, "error: must provide a request body\n"},
+		"Empty":          {``, false, "error: no query provided\n"},
 		"NoStart":        {`{}`, false, "error: failed to parse query: missing start field\n"},
 		"GoodFilterKey1": {`{"start": "-4h", "filter": {"meta": "W123"}}`, true, ""},
 		"GoodFilterKey2": {`{"start": "-4h", "filter": {"meta_tag": "W123"}}`, true, ""},

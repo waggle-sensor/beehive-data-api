@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,29 +44,43 @@ func NewService(config *ServiceConfig) *Service {
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("%s request queued", r.RemoteAddr)
 	if !svc.requestQueue.Enter() {
-		log.Printf("request queue wait timeout for %s", r.RemoteAddr)
-		http.Error(w, "error: service unavailable. too many active requests.", http.StatusServiceUnavailable)
+		log.Printf("%s error: request queue timeout", r.RemoteAddr)
+		http.Error(w, "error: request queue timeout", http.StatusServiceUnavailable)
 		return
 	}
 	defer svc.requestQueue.Leave()
+	log.Printf("%s serving request", r.RemoteAddr)
 
-	query, err := parseQuery(r.Body)
-	if err == io.EOF {
-		http.Error(w, "error: must provide a request body", http.StatusBadRequest)
+	queryBody, err := io.ReadAll(r.Body)
+	if err == io.EOF || len(queryBody) == 0 {
+		log.Printf("%s error: no query provided", r.RemoteAddr)
+		http.Error(w, "error: no query provided", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
+		log.Printf("%s error: failed to read query body: %s", r.RemoteAddr, err.Error())
+		http.Error(w, "error: failed to read query body", http.StatusBadRequest)
+		return
+	}
+
+	query, err := parseQuery(queryBody)
+	if err != nil {
+		log.Printf("%s error: failed to parse query: %s", r.RemoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to parse query: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
+	r.Body.Close()
+
+	log.Printf("%s query: %q", r.RemoteAddr, queryBody)
 
 	queryStart := time.Now()
 	queryCount := 0
 
 	results, err := svc.backend.Query(r.Context(), query)
 	if err != nil {
-		log.Printf("error: failed to query backend: %s", err.Error())
+		log.Printf("%s error: failed to query backend: %s", r.RemoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -83,17 +98,17 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := results.Err(); err != nil {
-		log.Printf("error: %s", err)
+		log.Printf("%s error: %s", r.RemoteAddr, err)
 	}
 
 	queryDuration := time.Since(queryStart)
-	log.Printf("served %d records in %s - %f records/s", queryCount, queryDuration, float64(queryCount)/queryDuration.Seconds())
+	log.Printf("%s served %d records in %s - %f records/s", r.RemoteAddr, queryCount, queryDuration, float64(queryCount)/queryDuration.Seconds())
 }
 
 var metaRE = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-func parseQuery(r io.Reader) (*Query, error) {
-	decoder := json.NewDecoder(r)
+func parseQuery(data []byte) (*Query, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	query := &Query{}
 	if err := decoder.Decode(query); err != nil {

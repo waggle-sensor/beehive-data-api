@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 
@@ -25,7 +24,6 @@ func (backend *InfluxBackend) Query(ctx context.Context, query *Query) (Results,
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("query %v", fluxQuery)
 
 	queryAPI := backend.Client.QueryAPI(backend.Org)
 
