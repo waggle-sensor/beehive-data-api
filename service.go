@@ -19,9 +19,8 @@ type ServiceConfig struct {
 
 // Service keeps the service configuration for the SDR API service.
 type Service struct {
-	backend             Backend
-	requestQueue        chan struct{}
-	requestQueueTimeout time.Duration
+	backend      Backend
+	requestQueue *RequestQueue
 }
 
 func NewService(config *ServiceConfig) *Service {
@@ -36,33 +35,19 @@ func NewService(config *ServiceConfig) *Service {
 	}
 
 	return &Service{
-		backend:             config.Backend,
-		requestQueue:        make(chan struct{}, requestQueueSize),
-		requestQueueTimeout: requestQueueTimeout,
+		backend:      config.Backend,
+		requestQueue: NewRequestQueue(requestQueueSize, requestQueueTimeout),
 	}
-}
-
-func (svc *Service) enterRequestQueue() bool {
-	select {
-	case svc.requestQueue <- struct{}{}:
-		return true
-	case <-time.After(svc.requestQueueTimeout):
-	}
-	return false
-}
-
-func (svc *Service) leaveRequestQueue() {
-	<-svc.requestQueue
 }
 
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !svc.enterRequestQueue() {
+	if !svc.requestQueue.Enter() {
 		http.Error(w, "error: service unavailable. too many active requests.", http.StatusServiceUnavailable)
 		return
 	}
-	defer svc.leaveRequestQueue()
+	defer svc.requestQueue.Leave()
 
 	query, err := parseQuery(r.Body)
 	if err == io.EOF {
