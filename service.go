@@ -44,6 +44,7 @@ func NewService(config *ServiceConfig) *Service {
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !svc.requestQueue.Enter() {
+		log.Printf("request queue wait timeout for %s", r.RemoteAddr)
 		http.Error(w, "error: service unavailable. too many active requests.", http.StatusServiceUnavailable)
 		return
 	}
