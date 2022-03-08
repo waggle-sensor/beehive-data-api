@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,11 +42,21 @@ func main() {
 	})
 
 	http.Handle("/api/v1/query", svc)
+	http.HandleFunc("/whoami", whoamiHandler)
 
 	log.Printf("service listening on %s", *addr)
 	log.Printf("request queue size is %d with %s timeout", *requestQueueSize, *requestQueueTimeout)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func whoamiHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "hello and thanks for visiting!\n\nhere's some info about your request!\n\n")
+
+	fmt.Fprintf(w, "headers:\n")
+	for k, v := range r.Header {
+		fmt.Fprintf(w, "%q: %q\n", k, v)
 	}
 }
 
