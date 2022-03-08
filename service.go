@@ -137,12 +137,8 @@ func writeContentDispositionHeader(w http.ResponseWriter) {
 }
 
 func getRemoteAddr(r *http.Request) string {
-	// TODO(sean) figure out the right headers to use
-	// // if reverse proxy provides a remote address, use that
-	// forwardedFor := r.Header.Get("X-Forwarded-For")
-	// if forwardedFor != "" {
-	// 	return forwardedFor
-	// }
-	// // otherwise, fallback to built-in remote address
+	if addr := r.Header.Get("X-Forwarded-For"); addr != "" {
+		return addr
+	}
 	return r.RemoteAddr
 }
