@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -194,6 +195,7 @@ func buildFilterSubquery(query *Query) (string, error) {
 	}
 
 	if len(parts) > 0 {
+		sort.Strings(parts)
 		return fmt.Sprintf(`filter(fn: (r) => %s)`, strings.Join(parts, " and ")), nil
 	}
 

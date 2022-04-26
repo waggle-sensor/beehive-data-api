@@ -20,20 +20,18 @@ func intptr(x int) *int {
 }
 
 func TestBuildFluxQuery(t *testing.T) {
-	testcases := []struct {
+	testcases := map[string]struct {
 		Query      *Query
 		Expect     string
 		ShouldFail bool
 	}{
-		// this case checks for start in time range
-		{
+		"StartRange": {
 			Query: &Query{
 				Start: "-4h",
 			},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h)`,
 		},
-		// this case checks for bucket
-		{
+		"Bucket": {
 			Query: &Query{
 				Bucket: strptr("downsampled"),
 				Start:  "-4h",
@@ -41,8 +39,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			},
 			Expect: `from(bucket:"downsampled") |> range(start:-4h) |> tail(n:3)`,
 		},
-		// check invalid
-		{
+		"InvalidBucket": {
 			Query: &Query{
 				Bucket: strptr("_badbucket"),
 				Start:  "-4h",
@@ -51,8 +48,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect:     ``,
 			ShouldFail: true,
 		},
-		// this case checks for start and end in time range
-		{
+		"StartAndEndRange": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
@@ -60,8 +56,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> tail(n:3)`,
 		},
-		// this case checks for exact match filter
-		{
+		"ExactFilter": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
@@ -70,8 +65,17 @@ func TestBuildFluxQuery(t *testing.T) {
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.node == "0000000000000001")`,
 		},
-		// this case checks for rename on name field and usage of regexp
-		{
+		"ExactFilterMultiple": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+				Filter: map[string]string{
+					"node": "0000000000000001",
+					"vsn":  "W001",
+				}},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.node == "0000000000000001" and r.vsn == "W001")`,
+		},
+		"RegexpFilter": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
@@ -80,33 +84,37 @@ func TestBuildFluxQuery(t *testing.T) {
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/)`,
 		},
-		{
+		"Combined": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
 				Tail:  intptr(123),
 				Filter: map[string]string{
-					"name": "env.temp.*",
+					"name":   "env.temp.*",
+					"vsn":    "V001",
+					"sensor": "es.*",
 				}},
-			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/) |> tail(n:123)`,
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.sensor =~ /^es.*$/ and r.vsn == "V001") |> tail(n:123)`,
 		},
 	}
 
-	for _, c := range testcases {
-		s, err := buildFluxQuery("mybucket", c.Query)
+	for name, tc := range testcases {
+		t.Run(name, func(t *testing.T) {
+			s, err := buildFluxQuery("mybucket", tc.Query)
 
-		if c.ShouldFail {
-			if err == nil {
-				t.Fatal(fmt.Printf("expected error"))
+			if tc.ShouldFail {
+				if err == nil {
+					t.Fatal(fmt.Printf("expected error"))
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if s != tc.Expect {
+					t.Fatalf("flux query expected:\nexpect: %s\noutput: %s", s, tc.Expect)
+				}
 			}
-		} else {
-			if err != nil {
-				t.Fatal(err)
-			}
-			if s != c.Expect {
-				t.Fatalf("flux query expected:\nexpect: %s\noutput: %s", s, c.Expect)
-			}
-		}
+		})
 	}
 }
 
