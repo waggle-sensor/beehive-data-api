@@ -9,6 +9,7 @@ import (
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -31,6 +32,9 @@ func main() {
 	// NOTE temporarily redirecting to sage docs. can change to something better later.
 	http.Handle("/", http.RedirectHandler("https://docs.sagecontinuum.org/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
 
+	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/whoami", whoamiHandler)
+
 	svc := NewService(&ServiceConfig{
 		Backend: &InfluxBackend{
 			Client: client,
@@ -42,7 +46,6 @@ func main() {
 	})
 
 	http.Handle("/api/v1/query", svc)
-	http.HandleFunc("/whoami", whoamiHandler)
 
 	log.Printf("service listening on %s", *addr)
 	log.Printf("request queue size is %d with %s timeout", *requestQueueSize, *requestQueueTimeout)
