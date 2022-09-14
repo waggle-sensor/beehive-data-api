@@ -84,6 +84,15 @@ func TestBuildFluxQuery(t *testing.T) {
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/)`,
 		},
+		"RegexpEscape": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+				Filter: map[string]string{
+					"plugin": "docker.io/waggle/plugin-iio.*",
+				}},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.plugin =~ /^docker.io\/waggle\/plugin-iio.*$/)`,
+		},
 		"Combined": {
 			Query: &Query{
 				Start: "-4h",

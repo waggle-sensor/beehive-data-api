@@ -188,7 +188,7 @@ func buildFilterSubquery(query *Query) (string, error) {
 
 		// handle wildcard or exact match. (this may not actually be an optimization)
 		if strings.Contains(pattern, "*") {
-			parts = append(parts, fmt.Sprintf("r.%s =~ /^%s$/", field, pattern))
+			parts = append(parts, fmt.Sprintf("r.%s =~ /^%s$/", field, strings.ReplaceAll(pattern, "/", "\\/")))
 		} else {
 			parts = append(parts, fmt.Sprintf("r.%s == \"%s\"", field, pattern))
 		}

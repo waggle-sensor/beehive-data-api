@@ -93,6 +93,10 @@ func TestValidQuery(t *testing.T) {
 		"BadField":       {`{"start": "-4h", "unknown": "val"}`, false, "error: failed to parse query: json: unknown field \"unknown\"\n"},
 		"EOF":            {`{"start": "-4h",`, false, "error: failed to parse query: unexpected EOF\n"},
 		"BadJSON":        {`{"start": "-4h",}`, false, "error: failed to parse query: invalid character '}' looking for beginning of object key string\n"},
+		"Wildcard1":      {`{"start": "-4h", "filter": {"host": ".*nxcore.*"}}`, true, ""},
+		// TODO(sean) since we are mocking out influxdb during testing, we are not detecting the following case
+		// correctly. we should move towards testing against the real services.
+		"Wildcard2": {`{"start": "-4h", "filter": {"plugin": "waggle/plugin-iio.*"}}`, true, ""},
 	}
 
 	svc := NewService(&ServiceConfig{
