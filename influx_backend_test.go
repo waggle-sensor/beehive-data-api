@@ -84,6 +84,16 @@ func TestBuildFluxQuery(t *testing.T) {
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/)`,
 		},
+		"RegexpOr": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+				Filter: map[string]string{
+					"name": "env.temp.*",
+					"vsn":  "W001|W002",
+				}},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.vsn =~ /^(W001|W002)$/)`,
+		},
 		"RegexpEscape": {
 			Query: &Query{
 				Start: "-4h",
@@ -93,7 +103,7 @@ func TestBuildFluxQuery(t *testing.T) {
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.plugin =~ /^docker.io\/waggle\/plugin-iio.*$/)`,
 		},
-		"Combined": {
+		"Combined1": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
@@ -104,6 +114,18 @@ func TestBuildFluxQuery(t *testing.T) {
 					"sensor": "es.*",
 				}},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.sensor =~ /^es.*$/ and r.vsn == "V001") |> tail(n:123)`,
+		},
+		"Combined2": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+				Tail:  intptr(123),
+				Filter: map[string]string{
+					"name":   "env.temp.*",
+					"vsn":    "V001|W123",
+					"sensor": "es.*",
+				}},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.sensor =~ /^es.*$/ and r.vsn =~ /^(V001|W123)$/) |> tail(n:123)`,
 		},
 	}
 

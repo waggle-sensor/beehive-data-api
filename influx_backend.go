@@ -187,9 +187,13 @@ func buildFilterSubquery(query *Query) (string, error) {
 		}
 
 		// handle wildcard or exact match. (this may not actually be an optimization)
-		if strings.Contains(pattern, "*") {
+		// TODO(sean) use regexp.QuoteMeta instead of manually using ReplaceAll.
+		switch {
+		case strings.Contains(pattern, "|"):
+			parts = append(parts, fmt.Sprintf("r.%s =~ /^(%s)$/", field, strings.ReplaceAll(pattern, "/", "\\/")))
+		case strings.Contains(pattern, "*"):
 			parts = append(parts, fmt.Sprintf("r.%s =~ /^%s$/", field, strings.ReplaceAll(pattern, "/", "\\/")))
-		} else {
+		default:
 			parts = append(parts, fmt.Sprintf("r.%s == \"%s\"", field, pattern))
 		}
 	}
@@ -202,7 +206,7 @@ func buildFilterSubquery(query *Query) (string, error) {
 	return "", nil
 }
 
-var validQueryStringRE = regexp.MustCompile("^[A-Za-z0-9+-_.*: ]*$")
+var validQueryStringRE = regexp.MustCompile("^[A-Za-z0-9+-_.*:| ]*$")
 
 func isValidFilterString(s string) bool {
 	return len(s) < 128 && validQueryStringRE.MatchString(s)
