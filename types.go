@@ -23,6 +23,7 @@ type Query struct {
 	Bucket *string           `json:"bucket,omitempty"`
 	Start  string            `json:"start,omitempty"`
 	End    string            `json:"end,omitempty"`
+	Head   *int              `json:"head,omitempty"`
 	Tail   *int              `json:"tail,omitempty"`
 	Filter map[string]string `json:"filter"`
 }
