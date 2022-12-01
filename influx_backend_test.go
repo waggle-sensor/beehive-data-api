@@ -48,13 +48,28 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect:     ``,
 			ShouldFail: true,
 		},
-		"StartAndEndRange": {
+		"StartEnd": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+			},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h)`,
+		},
+		"StartEndTail": {
 			Query: &Query{
 				Start: "-4h",
 				End:   "-2h",
 				Tail:  intptr(3),
 			},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> tail(n:3)`,
+		},
+		"StartEndHead": {
+			Query: &Query{
+				Start: "-4h",
+				End:   "-2h",
+				Head:  intptr(3),
+			},
+			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> limit(n:3)`,
 		},
 		"ExactFilter": {
 			Query: &Query{
@@ -162,6 +177,10 @@ func TestBuildFluxBadQuery(t *testing.T) {
 		},
 		{
 			End: "); danger",
+		},
+		{
+			Head: intptr(3),
+			Tail: intptr(3),
 		},
 	}
 

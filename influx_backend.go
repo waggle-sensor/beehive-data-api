@@ -136,6 +136,15 @@ func buildFluxQuery(bucket string, query *Query) (string, error) {
 		parts = append(parts, filterSubquery)
 	}
 
+	if query.Head != nil && query.Tail != nil {
+		return "", fmt.Errorf("head and tail cannot both be specified")
+	}
+
+	// add head subquery if included
+	if query.Head != nil {
+		parts = append(parts, fmt.Sprintf("limit(n:%d)", *query.Head))
+	}
+
 	// add tail subquery if included
 	if query.Tail != nil {
 		parts = append(parts, fmt.Sprintf("tail(n:%d)", *query.Tail))
