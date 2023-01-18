@@ -30,7 +30,7 @@ func main() {
 	client.Options().HTTPClient().Timeout = *influxdbTimeout
 
 	// NOTE temporarily redirecting to sage docs. can change to something better later.
-	http.Handle("/", http.RedirectHandler("https://docs.sagecontinuum.org/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
+	http.Handle("/", http.RedirectHandler("https://docs.waggle-edge.ai/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
 
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/whoami", whoamiHandler)
