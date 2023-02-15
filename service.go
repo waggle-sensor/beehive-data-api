@@ -57,6 +57,8 @@ func NewService(config *ServiceConfig) *Service {
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+
 	requestStartTime := time.Now()
 
 	remoteAddr := getRemoteAddr(r)
@@ -74,6 +76,11 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err == io.EOF || len(queryBody) == 0 {
 		log.Printf("%s error: no query provided", remoteAddr)
 		http.Error(w, "error: no query provided", http.StatusBadRequest)
+		return
+	}
+	if _, ok := err.(*http.MaxBytesError); ok {
+		log.Printf("%s error: rejected large request", remoteAddr)
+		http.Error(w, "error: query is too large - must be <1KB", http.StatusBadRequest)
 		return
 	}
 	if err != nil {

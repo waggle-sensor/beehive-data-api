@@ -1,4 +1,4 @@
-FROM golang:1.18.1 AS builder
+FROM golang:1.20 AS builder
 WORKDIR /build
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o influxdb-data-api

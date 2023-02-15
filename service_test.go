@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -140,6 +142,39 @@ func TestContentDispositionHeader(t *testing.T) {
 
 	if !pattern.MatchString(s) {
 		t.Fatalf("response must proper Content-Disposition header. got %q", s)
+	}
+}
+
+func TestRequestSizeLimit(t *testing.T) {
+	svc := NewService(&ServiceConfig{
+		Backend: &DummyBackend{},
+	})
+
+	body := bytes.NewBufferString(fmt.Sprintf(`{
+		"start": "-4h",
+		"filter": {
+			"uhoh": "%s"
+		}
+	}`, strings.Repeat("x", 1024)))
+
+	r := httptest.NewRequest("POST", "/", body)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, r)
+	resp := w.Result()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("service should have rejected large request. got response %s", resp.Status)
+	}
+
+	want := "error: query is too large - must be <1KB\n"
+
+	if string(respBody) != want {
+		t.Fatalf("unexpected response body.\ngot %q.\nwant %q", respBody, want)
 	}
 }
 
