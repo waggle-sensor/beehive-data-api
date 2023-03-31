@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -51,9 +50,6 @@ func main() {
 	streamSvc := &StreamService{
 		RabbitMQURL: *rabbitmqURL,
 	}
-	// TODO fix this when verifying internal cacert
-	streamSvc.TLSConfig = &tls.Config{}
-	streamSvc.TLSConfig.InsecureSkipVerify = true
 	http.Handle("/api/v0/stream", streamSvc)
 
 	log.Printf("service listening on %s", *addr)

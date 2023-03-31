@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -90,7 +89,6 @@ func getFilterForQueryValues(values url.Values) map[string]string {
 
 type StreamService struct {
 	RabbitMQURL string
-	TLSConfig   *tls.Config
 }
 
 func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +120,7 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := amqp.DialTLS(svc.RabbitMQURL, svc.TLSConfig)
+	conn, err := amqp.Dial(svc.RabbitMQURL)
 	if err != nil {
 		log.Printf("failed dial rabbitmq: %s", err)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
