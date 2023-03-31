@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ func main() {
 	influxdbToken := flag.String("influxdb.token", getenv("INFLUXDB_TOKEN", ""), "influxdb token")
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
 	influxdbTimeout := flag.Duration("influxdb.timeout", mustParseDuration(getenv("INFLUXDB_TIMEOUT", "15m")), "influxdb client timeout")
+	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
 	flag.Parse()
 
 	log.Printf("connecting to influxdb at %s", *influxdbURL)
@@ -44,8 +46,15 @@ func main() {
 		RequestQueueSize:    requestQueueSize,
 		RequestQueueTimeout: requestQueueTimeout,
 	})
-
 	http.Handle("/api/v1/query", svc)
+
+	streamSvc := &StreamService{
+		RabbitMQURL: *rabbitmqURL,
+	}
+	// TODO fix this when verifying internal cacert
+	streamSvc.TLSConfig = &tls.Config{}
+	streamSvc.TLSConfig.InsecureSkipVerify = true
+	http.Handle("/api/v0/stream", streamSvc)
 
 	log.Printf("service listening on %s", *addr)
 	log.Printf("request queue size is %d with %s timeout", *requestQueueSize, *requestQueueTimeout)
