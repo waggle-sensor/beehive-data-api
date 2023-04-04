@@ -171,6 +171,7 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 			fmt.Fprintf(w, ":keepalive\n\n")
+			flusher.Flush()
 		case amqpMsg := <-messages:
 			// reset heartbeat ticker
 			ticker.Reset(svc.HeartbeatDuration)
