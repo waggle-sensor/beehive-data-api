@@ -21,6 +21,7 @@ func main() {
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
 	influxdbTimeout := flag.Duration("influxdb.timeout", mustParseDuration(getenv("INFLUXDB_TIMEOUT", "15m")), "influxdb client timeout")
 	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
+	streamHeartbeatDuration := flag.Duration("stream.heartbeat-duration", mustParseDuration(getenv("STREAM_HEARTBEAT_DURATION", "15s")), "stream heartbeat duration")
 	flag.Parse()
 
 	log.Printf("connecting to influxdb at %s", *influxdbURL)
@@ -30,13 +31,7 @@ func main() {
 	// TODO figure out reasonable timeout on potentially large result sets
 	client.Options().HTTPClient().Timeout = *influxdbTimeout
 
-	// NOTE temporarily redirecting to sage docs. can change to something better later.
-	http.Handle("/", http.RedirectHandler("https://docs.waggle-edge.ai/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
-
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/whoami", whoamiHandler)
-
-	svc := NewService(&ServiceConfig{
+	querySvc := NewService(&ServiceConfig{
 		Backend: &InfluxBackend{
 			Client: client,
 			Org:    "waggle",
@@ -45,11 +40,17 @@ func main() {
 		RequestQueueSize:    requestQueueSize,
 		RequestQueueTimeout: requestQueueTimeout,
 	})
-	http.Handle("/api/v1/query", svc)
 
 	streamSvc := &StreamService{
-		RabbitMQURL: *rabbitmqURL,
+		RabbitMQURL:       *rabbitmqURL,
+		HeartbeatDuration: *streamHeartbeatDuration,
 	}
+
+	// NOTE temporarily redirecting to sage docs. can change to something better later.
+	http.Handle("/", http.RedirectHandler("https://docs.waggle-edge.ai/docs/tutorials/accessing-data", http.StatusTemporaryRedirect))
+	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/whoami", whoamiHandler)
+	http.Handle("/api/v1/query", querySvc)
 	http.Handle("/api/v0/stream", streamSvc)
 
 	log.Printf("service listening on %s", *addr)

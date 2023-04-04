@@ -88,7 +88,8 @@ func getFilterForQueryValues(values url.Values) map[string]string {
 }
 
 type StreamService struct {
-	RabbitMQURL string
+	RabbitMQURL       string
+	HeartbeatDuration time.Duration
 }
 
 func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -161,11 +162,19 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	ticker := time.NewTicker(svc.HeartbeatDuration)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ticker.C:
+			fmt.Fprintf(w, ":keepalive\n\n")
 		case amqpMsg := <-messages:
+			// reset heartbeat ticker
+			ticker.Reset(svc.HeartbeatDuration)
+
 			var msg Message
 
 			if err := unmarshalMessage(amqpMsg.Body, &msg); err != nil {
