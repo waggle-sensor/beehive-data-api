@@ -23,8 +23,9 @@ var (
 	})
 )
 
-func getFilterTopics(filter map[string]string) []string {
+func extractFilterTopicsFromName(filter map[string]string) []string {
 	if name, ok := filter["name"]; ok {
+		delete(filter, "name")
 		return strings.Split(name, "|")
 	}
 	return []string{"#"}
@@ -109,9 +110,18 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// TODO need to bound URL size here
 	filter := getFilterForQueryValues(r.URL.Query())
 
-	// get topics and ensure name field is deleted before constructing other field matchers
-	topics := getFilterTopics(filter)
-	delete(filter, "name")
+	// special case: vsn is always uppercase
+	if s, ok := filter["vsn"]; ok {
+		filter["vsn"] = strings.ToUpper(s)
+	}
+
+	// special case: node is always lowercase
+	if s, ok := filter["node"]; ok {
+		filter["node"] = strings.ToUpper(s)
+	}
+
+	// extract topics from name filter. deletes name field afterwards.
+	topics := extractFilterTopicsFromName(filter)
 
 	// create matcher
 	matchers, err := buildMatchers(filter)
