@@ -117,7 +117,7 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// special case: node is always lowercase
 	if s, ok := filter["node"]; ok {
-		filter["node"] = strings.ToUpper(s)
+		filter["node"] = strings.ToLower(s)
 	}
 
 	// extract topics from name filter. deletes name field afterwards.
