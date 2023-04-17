@@ -155,7 +155,7 @@ func TestRequestSizeLimit(t *testing.T) {
 		"filter": {
 			"uhoh": "%s"
 		}
-	}`, strings.Repeat("x", 1024)))
+	}`, strings.Repeat("x", 4096)))
 
 	r := httptest.NewRequest("POST", "/", body)
 	w := httptest.NewRecorder()

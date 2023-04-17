@@ -218,5 +218,5 @@ func buildFilterSubquery(query *Query) (string, error) {
 var validQueryStringRE = regexp.MustCompile("^[A-Za-z0-9+-_.*:| ]*$")
 
 func isValidFilterString(s string) bool {
-	return len(s) < 128 && validQueryStringRE.MatchString(s)
+	return validQueryStringRE.MatchString(s)
 }

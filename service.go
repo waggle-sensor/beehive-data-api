@@ -57,7 +57,7 @@ func NewService(config *ServiceConfig) *Service {
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	requestStartTime := time.Now()
 
