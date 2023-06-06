@@ -25,52 +25,28 @@ var (
 )
 
 type ServiceConfig struct {
-	Backend             Backend
-	RequestQueueSize    *int
-	RequestQueueTimeout *time.Duration
-	// TODO(sean) make queue size part of config
+	Backend Backend
 }
 
 // Service keeps the service configuration for the SDR API service.
 type Service struct {
-	backend      Backend
-	requestQueue *RequestQueue
+	backend Backend
 }
 
 func NewService(config *ServiceConfig) *Service {
-	requestQueueSize := 10
-	if config.RequestQueueSize != nil {
-		requestQueueSize = *config.RequestQueueSize
-	}
-
-	requestQueueTimeout := 10 * time.Second
-	if config.RequestQueueTimeout != nil {
-		requestQueueTimeout = *config.RequestQueueTimeout
-	}
-
-	return &Service{
-		backend:      config.Backend,
-		requestQueue: NewRequestQueue(requestQueueSize, requestQueueTimeout),
-	}
+	return &Service{backend: config.Backend}
 }
 
 // ServeHTTP parses a query request, translates and forwards it to InfluxDB
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	requestStartTime := time.Now()
 
 	remoteAddr := getRemoteAddr(r)
+	log.Printf("received request from %s", remoteAddr)
 
-	log.Printf("%s request queued", remoteAddr)
-	if !svc.requestQueue.Enter() {
-		log.Printf("%s error: request queue timeout", remoteAddr)
-		http.Error(w, "error: request queue timeout", http.StatusServiceUnavailable)
-		return
-	}
-	defer svc.requestQueue.Leave()
-	log.Printf("%s serving request", remoteAddr)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
 
 	queryBody, err := io.ReadAll(r.Body)
 	if err == io.EOF || len(queryBody) == 0 {
@@ -95,7 +71,6 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("error: failed to parse query: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
-	r.Body.Close()
 
 	log.Printf("%s query: %q", remoteAddr, queryBody)
 
