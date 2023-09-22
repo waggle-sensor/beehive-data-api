@@ -4,7 +4,7 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY *.go .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o influxdb-data-api
 
 FROM scratch
