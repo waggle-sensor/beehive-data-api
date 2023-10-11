@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/influxdata/influxdb-client-go/v2 v2.12.3
 	github.com/prometheus/client_golang v1.14.0
+	github.com/rabbitmq/amqp091-go v1.8.0
 )
 
 require (
@@ -20,8 +21,7 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
-	github.com/rabbitmq/amqp091-go v1.8.0 // indirect
-	golang.org/x/net v0.8.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 )
