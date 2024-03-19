@@ -33,13 +33,14 @@ func (backend *InfluxBackend) Query(ctx context.Context, query *Query) (Results,
 		return nil, err
 	}
 
-	return &influxResults{results: results}, nil
+	return &influxResults{results: results, usedAggFunc: query.Func != nil}, nil
 }
 
 type influxResults struct {
-	results *api.QueryTableResult
-	record  *Record
-	err     error
+	results     *api.QueryTableResult
+	record      *Record
+	err         error
+	usedAggFunc bool
 }
 
 func (r *influxResults) Err() error {
@@ -58,11 +59,11 @@ func (r *influxResults) Next() bool {
 	if !r.results.Next() {
 		return false
 	}
-	r.record, r.err = convertToAPIRecord(r.results.Record())
+	r.record, r.err = r.convertToAPIRecord(r.results.Record())
 	return r.err == nil
 }
 
-func convertToAPIRecord(rec *influxdb2query.FluxRecord) (*Record, error) {
+func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*Record, error) {
 	apirec := &Record{}
 
 	name, ok := rec.Values()["_measurement"].(string)
@@ -71,7 +72,12 @@ func convertToAPIRecord(rec *influxdb2query.FluxRecord) (*Record, error) {
 	}
 
 	apirec.Name = name
-	apirec.Timestamp = rec.Time()
+	if r.usedAggFunc {
+		// TODO(sean) Think about the right timestamp to provide for aggregations, particularly if we plan on supporting any windowing.
+		apirec.Timestamp = rec.Start()
+	} else {
+		apirec.Timestamp = rec.Time()
+	}
 	apirec.Value = rec.Values()["_value"]
 	apirec.Meta = buildMetaFromRecord(rec)
 	return apirec, nil
