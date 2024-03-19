@@ -150,6 +150,25 @@ func buildFluxQuery(bucket string, query *Query) (string, error) {
 		parts = append(parts, fmt.Sprintf("tail(n:%d)", *query.Tail))
 	}
 
+	// add func subquery if included
+	if query.Func != nil {
+		fn := *query.Func
+		switch fn {
+		case "mean":
+			parts = append(parts, "mean()")
+		case "min":
+			parts = append(parts, "min()")
+		case "max":
+			parts = append(parts, "max()")
+		case "sum":
+			parts = append(parts, "sum()")
+		case "count":
+			parts = append(parts, "count()")
+		default:
+			return "", fmt.Errorf("unsupported function")
+		}
+	}
+
 	return strings.Join(parts, " |> "), nil
 }
 
