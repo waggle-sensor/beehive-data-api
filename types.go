@@ -26,6 +26,7 @@ type Query struct {
 	Head   *int              `json:"head,omitempty"`
 	Tail   *int              `json:"tail,omitempty"`
 	Func   *string           `json:"experimental_func,omitempty"`
+	Window *string           `json:"experimental_window,omitempty"`
 	Filter map[string]string `json:"filter"`
 }
 

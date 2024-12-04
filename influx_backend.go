@@ -33,14 +33,14 @@ func (backend *InfluxBackend) Query(ctx context.Context, query *Query) (Results,
 		return nil, err
 	}
 
-	return &influxResults{results: results, usedAggFunc: query.Func != nil}, nil
+	return &influxResults{results: results, useStartTimestamp: query.Func != nil && query.Window == nil}, nil
 }
 
 type influxResults struct {
-	results     *api.QueryTableResult
-	record      *Record
-	err         error
-	usedAggFunc bool
+	results           *api.QueryTableResult
+	record            *Record
+	err               error
+	useStartTimestamp bool
 }
 
 func (r *influxResults) Err() error {
@@ -72,7 +72,7 @@ func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*Rec
 	}
 
 	apirec.Name = name
-	if r.usedAggFunc {
+	if r.useStartTimestamp {
 		// TODO(sean) Think about the right timestamp to provide for aggregations, particularly if we plan on supporting any windowing.
 		apirec.Timestamp = rec.Start()
 	} else {
@@ -156,8 +156,15 @@ func buildFluxQuery(bucket string, query *Query) (string, error) {
 		parts = append(parts, fmt.Sprintf("tail(n:%d)", *query.Tail))
 	}
 
-	// add func subquery if included
-	if query.Func != nil {
+	// ensure window is not used without aggregation function
+	if query.Window != nil && query.Func == nil {
+		return "", fmt.Errorf("window cannot be used without aggregation function")
+	}
+
+	// add aggregation subqueries if included
+	if query.Func != nil && query.Window != nil {
+		parts = append(parts, fmt.Sprintf("aggregateWindow(every: %s, fn: %s)", *query.Window, *query.Func))
+	} else if query.Func != nil {
 		fn := *query.Func
 		switch fn {
 		case "mean":
