@@ -17,6 +17,9 @@ func main() {
 	influxdbToken := flag.String("influxdb.token", getenv("INFLUXDB_TOKEN", ""), "influxdb token")
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
 	influxdbTimeout := flag.Duration("influxdb.timeout", mustParseDuration(getenv("INFLUXDB_TIMEOUT", "15m")), "influxdb client timeout")
+	coldWarehouse := flag.String("cold.warehouse", getenv("COLD_WAREHOUSE", ""), "Iceberg warehouse URL on Pelican; enables the tiered backend when set")
+	coldWatermark := flag.String("cold.watermark", getenv("COLD_WATERMARK", ""), "RFC3339 instant; data before it is served from cold, at or after from hot")
+	pelicanKey := flag.String("pelican.key", getenv("PELICAN_KEY_PATH", ""), "PEM key that signs SciTokens for the cold warehouse")
 	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
 	streamHeartbeatDuration := flag.Duration("stream.heartbeat-duration", mustParseDuration(getenv("STREAM_HEARTBEAT_DURATION", "15s")), "stream heartbeat duration")
 	flag.Parse()
@@ -28,13 +31,40 @@ func main() {
 	// TODO figure out reasonable timeout on potentially large result sets
 	client.Options().HTTPClient().Timeout = *influxdbTimeout
 
-	querySvc := NewService(&ServiceConfig{
-		Backend: &InfluxBackend{
-			Client: client,
-			Org:    "waggle",
-			Bucket: *influxdbBucket,
-		},
-	})
+	var backend Backend = &InfluxBackend{
+		Client: client,
+		Org:    "waggle",
+		Bucket: *influxdbBucket,
+	}
+
+	// The tiered backend is opt-in. With COLD_WAREHOUSE unset the service
+	// behaves exactly as it always has, so the single-tier path stays the
+	// default and its tests keep covering what ships by default.
+	if *coldWarehouse != "" {
+		if *coldWatermark == "" {
+			log.Fatal("cold.warehouse requires cold.watermark")
+		}
+		if *pelicanKey == "" {
+			log.Fatal("cold.warehouse requires pelican.key")
+		}
+		watermark, err := time.Parse(time.RFC3339, *coldWatermark)
+		if err != nil {
+			log.Fatalf("invalid cold.watermark %q: %s", *coldWatermark, err)
+		}
+		cold, err := buildColdBackend(*coldWarehouse, *pelicanKey)
+		if err != nil {
+			log.Fatalf("cold backend: %s", err)
+		}
+		defer cold.DB.Close()
+		log.Printf("tiered backend: duckdb iceberg_scan on %s, watermark %s", *coldWarehouse, watermark.Format(time.RFC3339Nano))
+		backend = &TieredBackend{
+			Hot:       backend,
+			Cold:      cold,
+			Watermark: watermark,
+		}
+	}
+
+	querySvc := NewService(&ServiceConfig{Backend: backend})
 
 	streamSvc := &StreamService{
 		RabbitMQURL:       *rabbitmqURL,
