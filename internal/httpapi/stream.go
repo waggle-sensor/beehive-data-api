@@ -1,4 +1,5 @@
-package main
+// stream.go contains the StreamService type and its associated functions for the public HTTP API.
+package httpapi
 
 import (
 	"encoding/json"
@@ -23,6 +24,7 @@ var (
 	})
 )
 
+// extractFilterTopicsFromName extracts the topics from the name filter.
 func extractFilterTopicsFromName(filter map[string]string) []string {
 	if name, ok := filter["name"]; ok {
 		delete(filter, "name")
@@ -31,6 +33,7 @@ func extractFilterTopicsFromName(filter map[string]string) []string {
 	return []string{"#"}
 }
 
+// buildMatchers builds the matchers from the filter.
 func buildMatchers(filter map[string]string) (map[string]*regexp.Regexp, error) {
 	matchers := map[string]*regexp.Regexp{}
 
@@ -45,6 +48,7 @@ func buildMatchers(filter map[string]string) (map[string]*regexp.Regexp, error) 
 	return matchers, nil
 }
 
+// Message is the message for the stream service.
 type Message struct {
 	Name      string            `json:"name"`
 	Timestamp time.Time         `json:"timestamp"`
@@ -52,6 +56,7 @@ type Message struct {
 	Meta      map[string]string `json:"meta"`
 }
 
+// unmarshalMessage unmarshals the message from the byte slice.
 func unmarshalMessage(b []byte, msg *Message) error {
 	var obj struct {
 		Name      string            `json:"name"`
@@ -71,6 +76,7 @@ func unmarshalMessage(b []byte, msg *Message) error {
 	return nil
 }
 
+// matchMessage matches the message against the matchers.
 func matchMessage(matchers map[string]*regexp.Regexp, msg *Message) bool {
 	for key, matcher := range matchers {
 		if !matcher.MatchString(msg.Meta[key]) {
@@ -80,6 +86,7 @@ func matchMessage(matchers map[string]*regexp.Regexp, msg *Message) bool {
 	return true
 }
 
+// getFilterForQueryValues gets the filter for the query values.
 func getFilterForQueryValues(values url.Values) map[string]string {
 	filter := make(map[string]string)
 	for k := range values {
@@ -88,11 +95,13 @@ func getFilterForQueryValues(values url.Values) map[string]string {
 	return filter
 }
 
+// StreamService is the service for the stream service.
 type StreamService struct {
 	RabbitMQURL       string
 	HeartbeatDuration time.Duration
 }
 
+// ServeHTTP serves the HTTP request.
 func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

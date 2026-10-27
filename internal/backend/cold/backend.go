@@ -1,39 +1,68 @@
-package main
+// backend.go contains the cold backend type and its associated functions.
+package cold
 
 import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
+
+	"beehive-data-api/internal/arrowio"
+	model "beehive-data-api/internal/query"
 )
 
-// ColdBackend reads the Iceberg cold tier with DuckDB.
+// Backend is the cold backend type.
+// Reads the Iceberg cold tier with DuckDB.
 //
 // DuckDB's iceberg extension scans a metadata URL over HTTPS, using a
-// bearer token for Pelican. There is no separate query service and no
-// Arrow materialization: one statement plans the manifests, prunes files,
-// and streams rows. The token is installed as an http secret, which is
-// database-global, so queries run one at a time.
-type ColdBackend struct {
-	DB        *sql.DB
-	Warehouse string
-	KeyPath   string
-	Client    *http.Client
+// bearer token for Pelican. A newline-JSON response scans rows through
+// database/sql. An Arrow response reads DuckDB record batches directly
+// (cold_arrow.go) so those rows are not copied into Go records. The token
+// is installed as an http secret, which is database-global, so queries run
+// one at a time.
+type Backend struct {
+	coldArrowState
+	DB         *sql.DB
+	connector  *duckdb.Connector
+	Warehouse  string
+	KeyPath    string
+	Client     *http.Client
+	ProfileDir string
+	IOSettings *IOSettings
 
-	mu sync.Mutex
+	mu     sync.Mutex
+	closed bool
 }
 
-// buildColdBackend opens DuckDB and loads the httpfs and iceberg extensions.
+// Close closes the cold backend.
+// Waits for active cold results and releases both query engines.
+func (backend *Backend) Close() error {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.closed {
+		return nil
+	}
+	backend.closed = true
+	err := backend.closeArrow()
+	if backend.DB != nil {
+		err = errors.Join(err, backend.DB.Close())
+	}
+	return err
+}
+
+// NewBackend builds the cold backend.
+// Opens DuckDB and loads the httpfs and iceberg extensions.
 // The first call downloads those extensions; later connections only LOAD them.
-func buildColdBackend(warehouse, keyPath string) (*ColdBackend, error) {
+func NewBackend(warehouse, keyPath string, settings IOSettings) (*Backend, error) {
 	warehouse = strings.TrimRight(warehouse, "/")
 	if warehouse == "" {
 		return nil, fmt.Errorf("cold warehouse is empty")
@@ -47,15 +76,7 @@ func buildColdBackend(warehouse, keyPath string) (*ColdBackend, error) {
 
 	connector, err := duckdb.NewConnector("", func(execer driver.ExecerContext) error {
 		ctx := context.Background()
-		for _, q := range []string{
-			"SET TimeZone='UTC'",
-			"SET threads=2",
-			"SET memory_limit='3GB'",
-			"INSTALL httpfs",
-			"LOAD httpfs",
-			"INSTALL iceberg",
-			"LOAD iceberg",
-		} {
+		for _, q := range coldDuckDBSetup(&settings) {
 			if _, err := execer.ExecContext(ctx, q, nil); err != nil {
 				return fmt.Errorf("%s: %w", q, err)
 			}
@@ -71,19 +92,50 @@ func buildColdBackend(warehouse, keyPath string) (*ColdBackend, error) {
 		db.Close()
 		return nil, err
 	}
-	return &ColdBackend{
-		DB:        db,
-		Warehouse: warehouse,
-		KeyPath:   keyPath,
-		Client:    &http.Client{Timeout: 30 * time.Second},
+	var engineVersion string
+	if err := db.QueryRow("SELECT version()").Scan(&engineVersion); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if !strings.HasPrefix(engineVersion, "v2.0.") {
+		db.Close()
+		return nil, fmt.Errorf("expected DuckDB 2.0.x, linked %s", engineVersion)
+	}
+	log.Printf("cold DuckDB %s threads=2 memory_limit=3GB async_threads=%d read_ahead_depth=%d", engineVersion, settings.AsyncThreads, settings.ReadAheadDepth)
+	return &Backend{
+		DB:         db,
+		connector:  connector,
+		Warehouse:  warehouse,
+		KeyPath:    keyPath,
+		Client:     &http.Client{Timeout: 30 * time.Second},
+		IOSettings: &settings,
 	}, nil
 }
 
-// Query reads version-hint.text, then streams the rows inside the query window.
-func (backend *ColdBackend) Query(ctx context.Context, query *Query) (Results, error) {
+// Query queries the cold backend.
+// Reads version-hint.text, then streams the rows inside the query window.
+func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
 	if query.Func != nil {
 		return nil, fmt.Errorf("aggregations are not supported against cold storage")
 	}
+
+	var profile *coldQueryProfile
+	handedOff := false
+	if arrowio.WantsResult(ctx) && backend.ProfileDir != "" {
+		var profileErr error
+		profile, profileErr = newColdQueryProfile(ctx, backend.ProfileDir)
+		if profileErr != nil {
+			log.Printf("cold profile creation: %v", profileErr)
+		} else {
+			ctx = context.WithValue(ctx, coldQueryProfileKey{}, profile)
+		}
+	}
+	defer func() {
+		if !handedOff {
+			profile.finish(true)
+		}
+	}()
+	phaseStart := coldProfileClock(profile)
 
 	key, err := loadPelicanKey(backend.KeyPath)
 	if err != nil {
@@ -99,17 +151,38 @@ func (backend *ColdBackend) Query(ctx context.Context, query *Query) (Results, e
 		return nil, err
 	}
 
+	profile.duration("auth_seconds", phaseStart)
+	phaseStart = coldProfileClock(profile)
 	stem, err := backend.readHint(ctx, tok)
 	if err != nil {
 		return nil, err
 	}
+	profile.duration("hint_http_seconds", phaseStart)
+	phaseStart = coldProfileClock(profile)
 	metadataURL := fmt.Sprintf("%s/sage/obs/metadata/%s.metadata.json", backend.Warehouse, stem)
-	statement, err := buildColdSQL(query, metadataURL, time.Now().UTC())
+	arrowResult := arrowio.WantsResult(ctx)
+	now := time.Now().UTC()
+	var statement string
+	if arrowResult {
+		statement, err = buildColdArrowSQL(query, metadataURL, now)
+	} else {
+		statement, err = buildColdSQL(query, metadataURL, now)
+	}
 	if err != nil {
 		return nil, err
 	}
+	profile.duration("sql_build_seconds", phaseStart)
+	if arrowResult {
+		result, err := backend.queryArrow(ctx, tok, statement)
+		handedOff = err == nil
+		return result, err
+	}
 
 	backend.mu.Lock()
+	if backend.closed {
+		backend.mu.Unlock()
+		return nil, fmt.Errorf("cold backend is closed")
+	}
 	released := false
 	release := func() {
 		if !released {
@@ -145,8 +218,8 @@ func (backend *ColdBackend) Query(ctx context.Context, query *Query) (Results, e
 	return &coldResults{rows: rows, conn: conn, release: release}, nil
 }
 
-// readHint reads the version-hint.text file from the cold storage.
-func (backend *ColdBackend) readHint(ctx context.Context, tok string) (string, error) {
+// readHint reads the version-hint.text file.
+func (backend *Backend) readHint(ctx context.Context, tok string) (string, error) {
 	hintURL := backend.Warehouse + "/sage/obs/metadata/version-hint.text"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hintURL, nil)
 	if err != nil {
@@ -176,6 +249,7 @@ func (backend *ColdBackend) readHint(ctx context.Context, tok string) (string, e
 	return stem, nil
 }
 
+// validHintStem checks if the stem is valid.
 func validHintStem(stem string) bool {
 	if stem == "" || len(stem) > 128 || strings.Contains(stem, "..") {
 		return false
@@ -193,19 +267,21 @@ func validHintStem(stem string) bool {
 	return true
 }
 
-// coldResults implements Results for a DuckDB query against cold storage.
+// coldResults is the results for the cold backend.
+// Implements Results for a DuckDB query against cold storage.
 type coldResults struct {
 	rows    *sql.Rows
 	conn    *sql.Conn
 	release func()
-	record  *Record
+	record  *model.Record
 	err     error
 }
 
-// Err returns the error from the last operation.
+// Err returns the error from the cold results.
 func (r *coldResults) Err() error { return r.err }
 
-// Close closes the results and releases the database connection.
+// Close closes the cold results.
+// Releases the database connection.
 func (r *coldResults) Close() error {
 	err := r.rows.Close()
 	if r.conn != nil {
@@ -218,9 +294,9 @@ func (r *coldResults) Close() error {
 }
 
 // Record returns the current row as a Record.
-func (r *coldResults) Record() *Record { return r.record }
+func (r *coldResults) Record() *model.Record { return r.record }
 
-// Next advances the results to the next row.
+// Next advances the cold results to the next row.
 func (r *coldResults) Next() bool {
 	if !r.rows.Next() {
 		if err := r.rows.Err(); err != nil {
@@ -235,83 +311,4 @@ func (r *coldResults) Next() bool {
 	}
 	r.record = rec
 	return true
-}
-
-// scanColdRecord scans a row from the cold backend into a Record.
-func scanColdRecord(rows *sql.Rows) (*Record, error) {
-	var ts time.Time
-	var name string
-	var vf sql.NullFloat64
-	var vi sql.NullInt64
-	var vs sql.NullString
-	var metaVal any
-	if err := rows.Scan(&ts, &name, &vf, &vi, &vs, &metaVal); err != nil {
-		return nil, err
-	}
-	var value any
-	switch {
-	case vf.Valid:
-		value = vf.Float64
-	case vi.Valid:
-		value = vi.Int64
-	case vs.Valid:
-		value = vs.String
-	}
-	meta, err := coldMeta(metaVal)
-	if err != nil {
-		return nil, err
-	}
-	return &Record{
-		Timestamp: ts.UTC(),
-		Name:      name,
-		Value:     value,
-		Meta:      meta,
-	}, nil
-}
-
-// coldMeta accepts either form DuckDB hands back: a JSON string, or the map
-// the driver already decoded. A missing map is an empty object, because
-// sage-data-client indexes meta without a nil check.
-func coldMeta(v any) (map[string]string, error) {
-	if v == nil {
-		return map[string]string{}, nil
-	}
-	switch m := v.(type) {
-	case map[string]string:
-		return m, nil
-	case map[string]any:
-		out := make(map[string]string, len(m))
-		for k, val := range m {
-			if val == nil {
-				continue
-			}
-			s, ok := val.(string)
-			if !ok {
-				return nil, fmt.Errorf("meta[%s] is %T", k, val)
-			}
-			out[k] = s
-		}
-		return out, nil
-	case string:
-		return coldMetaJSON(m)
-	case []byte:
-		return coldMetaJSON(string(m))
-	default:
-		return nil, fmt.Errorf("meta type %T", v)
-	}
-}
-
-// coldMetaJSON unmarshals a JSON string into a map[string]string.
-func coldMetaJSON(s string) (map[string]string, error) {
-	if s == "" || s == "null" {
-		return map[string]string{}, nil
-	}
-	out := map[string]string{}
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil, fmt.Errorf("meta: %w", err)
-	}
-	if out == nil {
-		out = map[string]string{}
-	}
-	return out, nil
 }

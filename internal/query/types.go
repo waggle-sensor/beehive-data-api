@@ -1,4 +1,5 @@
-package main
+// types.go is the query contract: the request body, a measurement record, and the Backend and Results interfaces every store implements.
+package query
 
 import (
 	"context"
@@ -36,4 +37,11 @@ type Record struct {
 	Name      string            `json:"name"`
 	Value     interface{}       `json:"value"`
 	Meta      map[string]string `json:"meta"`
+}
+
+// CompositeResults exposes ordered streams for encoders that consume native
+// batches. The enclosing Results retains responsibility for closing the parts.
+type CompositeResults interface {
+	Results
+	Parts() []Results
 }

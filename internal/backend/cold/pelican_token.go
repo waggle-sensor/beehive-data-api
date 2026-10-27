@@ -1,4 +1,5 @@
-package main
+// pelican_token.go contains the pelican token type and its associated functions.
+package cold
 
 import (
 	"crypto/ecdsa"
@@ -46,7 +47,7 @@ func (c sciClaims) GetNotBefore() (*jwt.NumericDate, error) {
 }
 
 // GetIssuer returns the issuer of the token.
-func (c sciClaims) GetIssuer() (string, error)  { return c.Issuer, nil }
+func (c sciClaims) GetIssuer() (string, error) { return c.Issuer, nil }
 
 // GetSubject returns the subject of the token.
 func (c sciClaims) GetSubject() (string, error) { return c.Subject, nil }

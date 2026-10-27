@@ -1,4 +1,5 @@
-package main
+// pelican_token_test.go contains the tests for the pelican token type.
+package cold
 
 import (
 	"crypto/ecdsa"
@@ -13,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// TestMintSciTokenClaims tests the mint sci token claims.
 func TestMintSciTokenClaims(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -63,6 +65,7 @@ func TestMintSciTokenClaims(t *testing.T) {
 	}
 }
 
+// TestReadScope tests the read scope.
 func TestReadScope(t *testing.T) {
 	got, err := readScope("https://nrdstor.example:8443/sage/cold-storage-demo-1/warehouse")
 	if err != nil {

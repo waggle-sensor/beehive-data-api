@@ -1,49 +1,37 @@
-package main
+// backend_test.go contains the tests for the Backend type.
+package tiered
 
 import (
 	"context"
 	"strings"
 	"testing"
 	"time"
+
+	model "beehive-data-api/internal/query"
+	"beehive-data-api/internal/testutil"
 )
 
 // recordingBackend records the query it was handed and replays fixed records.
 type recordingBackend struct {
 	name    string
-	records []*Record
-	got     *Query
+	records []*model.Record
+	got     *model.Query
 	err     error
 	calls   int
 }
 
-func (b *recordingBackend) Query(ctx context.Context, query *Query) (Results, error) {
+// Query queries the backend.
+func (b *recordingBackend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
 	b.calls++
 	q := *query
 	b.got = &q
 	if b.err != nil {
 		return nil, b.err
 	}
-	return &sliceResults{records: b.records}, nil
+	return &testutil.Results{Records: b.records}, nil
 }
 
-type sliceResults struct {
-	records []*Record
-	i       int
-	err     error
-	closed  bool
-}
-
-func (r *sliceResults) Err() error      { return r.err }
-func (r *sliceResults) Close() error    { r.closed = true; return nil }
-func (r *sliceResults) Record() *Record { return r.records[r.i-1] }
-func (r *sliceResults) Next() bool {
-	if r.i >= len(r.records) {
-		return false
-	}
-	r.i++
-	return true
-}
-
+// mustTime parses a time from a string.
 func mustTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts, err := time.Parse(time.RFC3339Nano, s)
@@ -53,15 +41,18 @@ func mustTime(t *testing.T, s string) time.Time {
 	return ts
 }
 
-func rec(t *testing.T, ts string, name string) *Record {
-	return &Record{Timestamp: mustTime(t, ts), Name: name, Meta: map[string]string{}}
+// rec creates a record.
+func rec(t *testing.T, ts string, name string) *model.Record {
+	return &model.Record{Timestamp: mustTime(t, ts), Name: name, Meta: map[string]string{}}
 }
 
-func newTiered(t *testing.T, hot, cold *recordingBackend, watermark string) *TieredBackend {
+// newTiered creates a new tiered backend.
+func newTiered(t *testing.T, hot, cold *recordingBackend, watermark string) *Backend {
 	t.Helper()
-	return &TieredBackend{Hot: hot, Cold: cold, Watermark: mustTime(t, watermark)}
+	return &Backend{Hot: hot, Cold: cold, Watermark: mustTime(t, watermark)}
 }
 
+// TestTieredRouting tests the tiered routing.
 func TestTieredRouting(t *testing.T) {
 	const wm = "2025-05-15T00:00:00Z"
 
@@ -90,7 +81,7 @@ func TestTieredRouting(t *testing.T) {
 			cold := &recordingBackend{name: "cold"}
 			backend := newTiered(t, hot, cold, wm)
 
-			results, err := backend.Query(context.Background(), &Query{Start: tc.start, End: tc.end})
+			results, err := backend.Query(context.Background(), &model.Query{Start: tc.start, End: tc.end})
 			if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
@@ -106,6 +97,7 @@ func TestTieredRouting(t *testing.T) {
 	}
 }
 
+// TestTieredSplitIsExactAtTheBoundary tests the tiered split is exact at the boundary.
 // The split must be exact at the boundary: the sub-ranges have to tile the
 // original with no gap and no overlap, or records are dropped or doubled.
 func TestTieredSplitIsExactAtTheBoundary(t *testing.T) {
@@ -114,7 +106,7 @@ func TestTieredSplitIsExactAtTheBoundary(t *testing.T) {
 	cold := &recordingBackend{}
 	backend := newTiered(t, hot, cold, wm)
 
-	results, err := backend.Query(context.Background(), &Query{
+	results, err := backend.Query(context.Background(), &model.Query{
 		Start:  "2025-05-10T00:00:00Z",
 		End:    "2025-05-20T00:00:00Z",
 		Filter: map[string]string{"vsn": "W099"},
@@ -139,6 +131,7 @@ func TestTieredSplitIsExactAtTheBoundary(t *testing.T) {
 	}
 }
 
+// TestTieredWatermarkIsNanosecondExact tests the tiered watermark is nanosecond exact.
 // The watermark is compared in nanoseconds on purpose: hot holds ns and
 // cold holds us, so a us-rounded boundary would strand a sub-us sliver.
 func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
@@ -148,7 +141,7 @@ func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
 	backend := newTiered(t, hot, cold, wm)
 
 	// Ends 1ns before the watermark: entirely cold, no hot query.
-	results, err := backend.Query(context.Background(), &Query{
+	results, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-15T00:00:00Z",
 		End:   "2025-05-15T00:00:00.000000499Z",
 	})
@@ -168,7 +161,7 @@ func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
 	hot2 := &recordingBackend{}
 	cold2 := &recordingBackend{}
 	backend2 := newTiered(t, hot2, cold2, wm)
-	results2, err := backend2.Query(context.Background(), &Query{
+	results2, err := backend2.Query(context.Background(), &model.Query{
 		Start: "2025-05-15T00:00:00.000000501Z",
 		End:   "2025-05-16T00:00:00Z",
 	})
@@ -185,21 +178,22 @@ func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
 	}
 }
 
+// TestTieredMergeIsOrderedAndLazy tests the tiered merge is ordered and lazy.
 // Cold records come first and hot second, with no buffering. Order matters
 // because clients assume a time-ordered stream.
 func TestTieredMergeIsOrderedAndLazy(t *testing.T) {
 	const wm = "2025-05-15T00:00:00Z"
-	hot := &recordingBackend{records: []*Record{
+	hot := &recordingBackend{records: []*model.Record{
 		rec(t, "2025-05-16T00:00:00Z", "c"),
 		rec(t, "2025-05-17T00:00:00Z", "d"),
 	}}
-	cold := &recordingBackend{records: []*Record{
+	cold := &recordingBackend{records: []*model.Record{
 		rec(t, "2025-05-11T00:00:00Z", "a"),
 		rec(t, "2025-05-12T00:00:00Z", "b"),
 	}}
 	backend := newTiered(t, hot, cold, wm)
 
-	results, err := backend.Query(context.Background(), &Query{
+	results, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-10T00:00:00Z",
 		End:   "2025-05-20T00:00:00Z",
 	})
@@ -228,6 +222,7 @@ func TestTieredMergeIsOrderedAndLazy(t *testing.T) {
 	}
 }
 
+// TestTieredRefusesWhatItCannotSplit tests the tiered refuses what it cannot split.
 // Aggregations and head/tail cannot be split. Both must refuse rather than
 // return a plausible wrong answer.
 func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
@@ -237,12 +232,12 @@ func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		query *Query
+		query *model.Query
 		want  string
 	}{
-		{"aggregation", &Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Func: &mean}, "aggregation"},
-		{"head", &Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Head: &limit}, "per-series"},
-		{"tail", &Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Tail: &limit}, "per-series"},
+		{"aggregation", &model.Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Func: &mean}, "aggregation"},
+		{"head", &model.Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Head: &limit}, "per-series"},
+		{"tail", &model.Query{Start: "2025-05-10T00:00:00Z", End: "2025-05-20T00:00:00Z", Tail: &limit}, "per-series"},
 	}
 
 	for _, tc := range tests {
@@ -269,7 +264,7 @@ func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
 	hot := &recordingBackend{}
 	cold := &recordingBackend{}
 	backend := newTiered(t, hot, cold, wm)
-	if _, err := backend.Query(context.Background(), &Query{
+	if _, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-20T00:00:00Z", End: "2025-05-25T00:00:00Z", Func: &mean,
 	}); err != nil {
 		t.Errorf("single-tier aggregation should be allowed: %s", err)
@@ -279,6 +274,7 @@ func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
 	}
 }
 
+// TestTieredRejectsRelativeTimestamps tests the tiered rejects relative timestamps.
 // A relative timestamp cannot be routed without knowing "now". Guessing
 // would route to the wrong tier, so it is refused explicitly.
 func TestTieredRejectsRelativeTimestamps(t *testing.T) {
@@ -286,7 +282,7 @@ func TestTieredRejectsRelativeTimestamps(t *testing.T) {
 	cold := &recordingBackend{}
 	backend := newTiered(t, hot, cold, "2025-05-15T00:00:00Z")
 
-	_, err := backend.Query(context.Background(), &Query{Start: "-1h"})
+	_, err := backend.Query(context.Background(), &model.Query{Start: "-1h"})
 	if err == nil {
 		t.Fatal("expected an error for a relative timestamp")
 	}
@@ -295,15 +291,16 @@ func TestTieredRejectsRelativeTimestamps(t *testing.T) {
 	}
 }
 
+// TestTieredSurfacesFirstTierError tests the tiered surfaces first tier error.
 // A failing cold tier must not look like an empty-but-complete result. The
 // service writes 200 before iterating, so Err() is the only signal left.
 func TestTieredSurfacesFirstTierError(t *testing.T) {
 	const wm = "2025-05-15T00:00:00Z"
-	hot := &recordingBackend{records: []*Record{rec(t, "2025-05-16T00:00:00Z", "c")}}
+	hot := &recordingBackend{records: []*model.Record{rec(t, "2025-05-16T00:00:00Z", "c")}}
 	cold := &recordingBackend{}
 	backend := newTiered(t, hot, cold, wm)
 
-	results, err := backend.Query(context.Background(), &Query{
+	results, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-10T00:00:00Z",
 		End:   "2025-05-20T00:00:00Z",
 	})
@@ -313,8 +310,8 @@ func TestTieredSurfacesFirstTierError(t *testing.T) {
 	defer results.Close()
 
 	// Inject a failure into the cold stream after it was handed over.
-	cr := results.(*tieredResults).first.(*sliceResults)
-	cr.err = context.DeadlineExceeded
+	cr := results.(*tieredResults).first.(*testutil.Results)
+	cr.ErrValue = context.DeadlineExceeded
 
 	for results.Next() {
 	}
@@ -328,15 +325,16 @@ func TestTieredSurfacesFirstTierError(t *testing.T) {
 	}
 }
 
+// TestTieredClosesColdWhenHotFailsToStart tests the tiered closes cold when hot fails to start.
 // If the hot query fails to even start, the already-open cold results must
 // be closed or the connection leaks.
 func TestTieredClosesColdWhenHotFailsToStart(t *testing.T) {
 	const wm = "2025-05-15T00:00:00Z"
 	hot := &recordingBackend{err: context.DeadlineExceeded}
-	cold := &recordingBackend{records: []*Record{rec(t, "2025-05-11T00:00:00Z", "a")}}
+	cold := &recordingBackend{records: []*model.Record{rec(t, "2025-05-11T00:00:00Z", "a")}}
 	backend := newTiered(t, hot, cold, wm)
 
-	_, err := backend.Query(context.Background(), &Query{
+	_, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-10T00:00:00Z",
 		End:   "2025-05-20T00:00:00Z",
 	})

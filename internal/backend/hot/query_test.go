@@ -1,38 +1,45 @@
-package main
+// influx_backend_test.go contains the tests for the Backend type.
+package hot
 
 import (
 	"fmt"
 	"io"
 	"log"
 	"testing"
+
+	model "beehive-data-api/internal/query"
 )
 
+// init initializes the test environment.
 func init() {
 	log.SetOutput(io.Discard)
 }
 
+// strptr converts a string to a pointer.
 func strptr(s string) *string {
 	return &s
 }
 
+// intptr converts an integer to a pointer.
 func intptr(x int) *int {
 	return &x
 }
 
+// TestBuildFluxQuery tests the build flux query.
 func TestBuildFluxQuery(t *testing.T) {
 	testcases := map[string]struct {
-		Query      *Query
+		Query      *model.Query
 		Expect     string
 		ShouldFail bool
 	}{
 		"StartRange": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 			},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h)`,
 		},
 		"Bucket": {
-			Query: &Query{
+			Query: &model.Query{
 				Bucket: strptr("downsampled"),
 				Start:  "-4h",
 				Tail:   intptr(3),
@@ -40,7 +47,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"downsampled") |> range(start:-4h) |> tail(n:3)`,
 		},
 		"InvalidBucket": {
-			Query: &Query{
+			Query: &model.Query{
 				Bucket: strptr("_badbucket"),
 				Start:  "-4h",
 				Tail:   intptr(3),
@@ -49,14 +56,14 @@ func TestBuildFluxQuery(t *testing.T) {
 			ShouldFail: true,
 		},
 		"StartEnd": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 			},
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h)`,
 		},
 		"StartEndTail": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Tail:  intptr(3),
@@ -64,7 +71,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> tail(n:3)`,
 		},
 		"StartEndHead": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Head:  intptr(3),
@@ -72,7 +79,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> limit(n:3)`,
 		},
 		"ExactFilter": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Filter: map[string]string{
@@ -81,7 +88,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.node == "0000000000000001")`,
 		},
 		"ExactFilterMultiple": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Filter: map[string]string{
@@ -91,7 +98,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.node == "0000000000000001" and r.vsn == "W001")`,
 		},
 		"RegexpFilter": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Filter: map[string]string{
@@ -100,7 +107,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/)`,
 		},
 		"RegexpOr": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Filter: map[string]string{
@@ -110,7 +117,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.vsn =~ /^(W001|W002)$/)`,
 		},
 		"RegexpEscape": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Filter: map[string]string{
@@ -119,7 +126,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r.plugin =~ /^docker.io\/waggle\/plugin-iio.*$/)`,
 		},
 		"Combined1": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Tail:  intptr(123),
@@ -131,7 +138,7 @@ func TestBuildFluxQuery(t *testing.T) {
 			Expect: `from(bucket:"mybucket") |> range(start:-4h,stop:-2h) |> filter(fn: (r) => r._measurement =~ /^env.temp.*$/ and r.sensor =~ /^es.*$/ and r.vsn == "V001") |> tail(n:123)`,
 		},
 		"Combined2": {
-			Query: &Query{
+			Query: &model.Query{
 				Start: "-4h",
 				End:   "-2h",
 				Tail:  intptr(123),
@@ -164,8 +171,9 @@ func TestBuildFluxQuery(t *testing.T) {
 	}
 }
 
+// TestBuildFluxBadQuery tests the build flux bad query.
 func TestBuildFluxBadQuery(t *testing.T) {
-	testcases := []*Query{
+	testcases := []*model.Query{
 		{
 			Start: "-4h",
 			Filter: map[string]string{

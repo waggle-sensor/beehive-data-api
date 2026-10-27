@@ -1,15 +1,19 @@
-package main
+// sql_test.go contains the tests for the cold SQL functions.
+package cold
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	model "beehive-data-api/internal/query"
 )
 
+// TestBuildColdSQL tests the build cold SQL.
 func TestBuildColdSQL(t *testing.T) {
 	now := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	url := "https://example.test/sage/obs/metadata/00002-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.metadata.json"
-	q := &Query{
+	q := &model.Query{
 		Start:  "2025-03-01T00:00:00Z",
 		End:    "2025-03-01T00:01:00Z",
 		Filter: map[string]string{"name": "wxt.env.temp", "sensor": "vaisala-wxt536"},
@@ -20,8 +24,8 @@ func TestBuildColdSQL(t *testing.T) {
 	}
 	for _, want := range []string{
 		"iceberg_scan('" + url + "')",
-		"time >= TIMESTAMPTZ '2025-03-01T00:00:00Z'",
-		"time <  TIMESTAMPTZ '2025-03-01T00:01:00Z'",
+		"time >= TIMESTAMPTZ_NS '2025-03-01T00:00:00Z'",
+		"time < TIMESTAMPTZ_NS '2025-03-01T00:01:00Z'",
 		"name = 'wxt.env.temp'",
 		"meta['sensor'] = 'vaisala-wxt536'",
 		"ORDER BY timestamp",
@@ -34,7 +38,7 @@ func TestBuildColdSQL(t *testing.T) {
 		t.Errorf("sql still reads parquet directly:\n%s", sql)
 	}
 
-	star := &Query{Start: q.Start, End: q.End, Filter: map[string]string{"name": "env.*"}}
+	star := &model.Query{Start: q.Start, End: q.End, Filter: map[string]string{"name": "env.*"}}
 	sql, err = buildColdSQL(star, url, now)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,7 @@ func TestBuildColdSQL(t *testing.T) {
 		t.Errorf("star filter was not a regex:\n%s", sql)
 	}
 
-	pipe := &Query{Start: q.Start, End: q.End, Filter: map[string]string{"plugin": "a|b"}}
+	pipe := &model.Query{Start: q.Start, End: q.End, Filter: map[string]string{"plugin": "a|b"}}
 	sql, err = buildColdSQL(pipe, url, now)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +57,7 @@ func TestBuildColdSQL(t *testing.T) {
 	}
 
 	n := 5
-	head := &Query{Start: q.Start, End: q.End, Head: &n}
+	head := &model.Query{Start: q.Start, End: q.End, Head: &n}
 	sql, err = buildColdSQL(head, url, now)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +66,7 @@ func TestBuildColdSQL(t *testing.T) {
 		t.Errorf("head was not per-series:\n%s", sql)
 	}
 
-	tail := &Query{Start: q.Start, End: q.End, Tail: &n}
+	tail := &model.Query{Start: q.Start, End: q.End, Tail: &n}
 	sql, err = buildColdSQL(tail, url, now)
 	if err != nil {
 		t.Fatal(err)
@@ -72,21 +76,36 @@ func TestBuildColdSQL(t *testing.T) {
 	}
 
 	fn := "mean"
-	if _, err := buildColdSQL(&Query{Start: q.Start, End: q.End, Func: &fn}, url, now); err == nil {
+	if _, err := buildColdSQL(&model.Query{Start: q.Start, End: q.End, Func: &fn}, url, now); err == nil {
 		t.Error("aggregation was accepted")
 	}
-	if _, err := buildColdSQL(&Query{Start: q.Start, End: q.End, Head: &n, Tail: &n}, url, now); err == nil {
+	if _, err := buildColdSQL(&model.Query{Start: q.Start, End: q.End, Head: &n, Tail: &n}, url, now); err == nil {
 		t.Error("head and tail together was accepted")
 	}
-	if _, err := buildColdSQL(&Query{Start: "-1h", End: q.End}, url, now); err == nil {
+	if _, err := buildColdSQL(&model.Query{Start: "-1h", End: q.End}, url, now); err == nil {
 		t.Error("relative start was accepted")
 	}
-	open := &Query{Start: q.Start}
+	open := &model.Query{Start: q.Start}
 	sql, err = buildColdSQL(open, url, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(sql, "time <  TIMESTAMPTZ '2025-06-01T00:00:00Z'") {
+	if !strings.Contains(sql, "time < TIMESTAMPTZ_NS '2025-06-01T00:00:00Z'") {
 		t.Errorf("empty end did not use now:\n%s", sql)
+	}
+
+	arrowSQL, err := buildColdArrowSQL(q, url, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"CAST(timestamp AS TIMESTAMP_NS) AS timestamp",
+		"to_json(value)::VARCHAR",
+		"json_merge_patch",
+		"iceberg_scan('" + url + "')",
+	} {
+		if !strings.Contains(arrowSQL, want) {
+			t.Errorf("arrow sql missing %q\n%s", want, arrowSQL)
+		}
 	}
 }

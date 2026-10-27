@@ -1,114 +1,16 @@
-package main
+// query.go contains the code for the hot backend query.
+package hot
 
 import (
-	"context"
 	"fmt"
-	"regexp"
+	model "beehive-data-api/internal/query"
 	"sort"
 	"strings"
-
-	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
-	"github.com/influxdata/influxdb-client-go/v2/api"
-	influxdb2query "github.com/influxdata/influxdb-client-go/v2/api/query"
 )
 
-// InfluxBackend implements a backend to InfluxDB.
-type InfluxBackend struct {
-	Client influxdb2.Client
-	Org    string
-	Bucket string
-}
-
-// Query converts and makes a query to an Influx backend.
-func (backend *InfluxBackend) Query(ctx context.Context, query *Query) (Results, error) {
-	fluxQuery, err := buildFluxQuery(backend.Bucket, query)
-	if err != nil {
-		return nil, err
-	}
-
-	queryAPI := backend.Client.QueryAPI(backend.Org)
-
-	results, err := queryAPI.Query(ctx, fluxQuery)
-	if err != nil {
-		return nil, err
-	}
-
-	return &influxResults{results: results, useStartTimestamp: query.Func != nil && query.Window == nil}, nil
-}
-
-type influxResults struct {
-	results           *api.QueryTableResult
-	record            *Record
-	err               error
-	useStartTimestamp bool
-}
-
-func (r *influxResults) Err() error {
-	return r.err
-}
-
-func (r *influxResults) Close() error {
-	return r.results.Close()
-}
-
-func (r *influxResults) Record() *Record {
-	return r.record
-}
-
-func (r *influxResults) Next() bool {
-	if !r.results.Next() {
-		return false
-	}
-	r.record, r.err = r.convertToAPIRecord(r.results.Record())
-	return r.err == nil
-}
-
-func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*Record, error) {
-	apirec := &Record{}
-
-	name, ok := rec.Values()["_measurement"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid measurement name type")
-	}
-
-	apirec.Name = name
-	if r.useStartTimestamp {
-		// TODO(sean) Think about the right timestamp to provide for aggregations, particularly if we plan on supporting any windowing.
-		apirec.Timestamp = rec.Start()
-	} else {
-		apirec.Timestamp = rec.Time()
-	}
-	apirec.Value = rec.Values()["_value"]
-	apirec.Meta = buildMetaFromRecord(rec)
-	return apirec, nil
-}
-
-func buildMetaFromRecord(rec *influxdb2query.FluxRecord) map[string]string {
-	meta := make(map[string]string)
-
-	for k, v := range rec.Values() {
-		// skip influxdb internal fields (convention is to start with _)
-		if strings.HasPrefix(k, "_") {
-			continue
-		}
-		// skip influxdb "leaky" fields (table and result don't use above
-		// convention but still leak internal details about query)
-		if k == "table" || k == "result" {
-			continue
-		}
-		// only include string types in meta
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		meta[k] = s
-	}
-
-	return meta
-}
-
 // buildFluxQuery builds a Flux query string for InfluxDB from a bucket name and Query
-func buildFluxQuery(bucket string, query *Query) (string, error) {
+// for the hot backend.
+func buildFluxQuery(bucket string, query *model.Query) (string, error) {
 	// override bucket if part of query
 	if query.Bucket != nil {
 		bucket = *query.Bucket
@@ -185,12 +87,14 @@ func buildFluxQuery(bucket string, query *Query) (string, error) {
 	return strings.Join(parts, " |> "), nil
 }
 
-func buildRangeSubquery(query *Query) (string, error) {
+// buildRangeSubquery builds the range subquery for the influx query.
+// for the hot backend.
+func buildRangeSubquery(query *model.Query) (string, error) {
 	var parts []string
-	if !isValidFilterString(query.Start) {
+	if !model.IsValidFilterString(query.Start) {
 		return "", fmt.Errorf("invalid start timestamp %q", query.Start)
 	}
-	if !isValidFilterString(query.End) {
+	if !model.IsValidFilterString(query.End) {
 		return "", fmt.Errorf("invalid end timestamp %q", query.End)
 	}
 	if query.Start != "" {
@@ -211,14 +115,16 @@ var fieldRenameMap = map[string]string{
 	"name": "_measurement",
 }
 
-func buildFilterSubquery(query *Query) (string, error) {
+// buildFilterSubquery builds the filter subquery for the influx query.
+// for the hot backend.
+func buildFilterSubquery(query *model.Query) (string, error) {
 	var parts []string
 
 	for field, pattern := range query.Filter {
-		if !isValidFilterString(field) {
+		if !model.IsValidFilterString(field) {
 			return "", fmt.Errorf("invalid filter field name %q", field)
 		}
-		if !isValidFilterString(pattern) {
+		if !model.IsValidFilterString(pattern) {
 			return "", fmt.Errorf("invalid filter field pattern %q", pattern)
 		}
 
@@ -245,10 +151,4 @@ func buildFilterSubquery(query *Query) (string, error) {
 	}
 
 	return "", nil
-}
-
-var validQueryStringRE = regexp.MustCompile("^[A-Za-z0-9+-_.*:| ]*$")
-
-func isValidFilterString(s string) bool {
-	return validQueryStringRE.MatchString(s)
 }

@@ -1,4 +1,5 @@
-package main
+// query.go contains the Service type and its associated functions for the public HTTP API.
+package httpapi
 
 import (
 	"bytes"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"beehive-data-api/internal/arrowio"
+	model "beehive-data-api/internal/query"
 )
 
 const metricNamespace = "dataapi"
@@ -24,20 +28,28 @@ var (
 	})
 )
 
+// ServiceConfig is the configuration for the Service.
 type ServiceConfig struct {
-	Backend Backend
+	Backend          model.Backend
+	ArrowCompression arrowio.Compression
 }
 
-// Service keeps the service configuration for the SDR API service.
+// Service is the service for the SDR API.
 type Service struct {
-	backend Backend
+	backend          model.Backend
+	arrowCompression arrowio.Compression
 }
 
+// NewService creates a new Service.
 func NewService(config *ServiceConfig) *Service {
-	return &Service{backend: config.Backend}
+	compression := config.ArrowCompression
+	if compression == "" {
+		compression = arrowio.CompressionZstd
+	}
+	return &Service{backend: config.Backend, arrowCompression: compression}
 }
 
-// ServeHTTP parses a query request, translates and forwards it to InfluxDB
+// ServeHTTP parses a query request, translates and forwards it to the backend
 // and writes the results back to the client.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestStartTime := time.Now()
@@ -77,7 +89,13 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	queryCount := 0
 	queryStart := time.Now()
 
-	results, err := svc.backend.Query(r.Context(), query)
+	ctx := r.Context()
+	arrowResult := arrowio.AcceptsStream(r.Header.Get("Accept"))
+	compression := svc.arrowCompression
+	if arrowResult {
+		ctx = arrowio.WithResult(ctx)
+	}
+	results, err := svc.backend.Query(ctx, query)
 	if err != nil {
 		log.Printf("%s error: failed to query backend: %s", remoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
@@ -86,21 +104,40 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer results.Close()
 
 	w.Header().Add("Access-Control-Allow-Origin", "*")
-	writeContentDispositionHeader(w)
+	if arrowResult {
+		w.Header().Set("Content-Type", arrowio.MIME)
+		w.Header().Set(arrowio.CompressionHeader, string(compression))
+		writeContentDispositionHeader(w, ".arrows")
+	} else {
+		writeContentDispositionHeader(w, ".ndjson")
+	}
 	w.WriteHeader(http.StatusOK)
 
-	startedWritingResults := false
-	for results.Next() {
-		record := results.Record()
+	if arrowResult {
 		// observe latency to start of response body. this is what the user actually sees so its what we care about.
-		if !startedWritingResults {
-			responseLatencySeconds.Observe(time.Since(requestStartTime).Seconds())
-			startedWritingResults = true
+		responseLatencySeconds.Observe(time.Since(requestStartTime).Seconds())
+		n, err := arrowio.WriteIPC(w, results, compression)
+		queryCount = n
+		if err != nil {
+			log.Printf("%s error: %s", remoteAddr, err)
+			// A streaming query can fail after headers or batches were sent.
+			// Abort HTTP framing so the client cannot accept partial rows as a
+			// successful complete extract. net/http handles this sentinel.
+			panic(http.ErrAbortHandler)
 		}
-		if err := writeRecord(w, record); err != nil {
-			break
+	} else {
+		startedWritingResults := false
+		for results.Next() {
+			record := results.Record()
+			if !startedWritingResults {
+				responseLatencySeconds.Observe(time.Since(requestStartTime).Seconds())
+				startedWritingResults = true
+			}
+			if err := writeRecord(w, record); err != nil {
+				break
+			}
+			queryCount++
 		}
-		queryCount++
 	}
 
 	if err := results.Err(); err != nil {
@@ -112,12 +149,13 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s served %d records in %s - %f records/s", remoteAddr, queryCount, queryDuration, responseRate)
 }
 
+// metaRE is a regular expression to match metadata keys.
 var metaRE = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-func parseQuery(data []byte) (*Query, error) {
+func parseQuery(data []byte) (*model.Query, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	query := &Query{}
+	query := &model.Query{}
 	if err := decoder.Decode(query); err != nil {
 		return nil, err
 	}
@@ -132,18 +170,26 @@ func parseQuery(data []byte) (*Query, error) {
 	return query, nil
 }
 
-func writeRecord(w io.Writer, rec *Record) error {
+// writeRecord writes a record to the writer.
+func writeRecord(w io.Writer, rec *model.Record) error {
 	return json.NewEncoder(w).Encode(rec)
 }
 
-func writeContentDispositionHeader(w http.ResponseWriter) {
-	filename := time.Now().Format("sage-download-20060102150405.ndjson")
-	w.Header().Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+// writeContentDispositionHeader writes a content disposition header to the writer.
+func writeContentDispositionHeader(w http.ResponseWriter, ext string) {
+	w.Header().Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, contentDispositionName(ext)))
 }
 
+// getRemoteAddr gets the remote address from the request.
 func getRemoteAddr(r *http.Request) string {
 	if addr := r.Header.Get("X-Forwarded-For"); addr != "" {
 		return addr
 	}
 	return r.RemoteAddr
+}
+
+// contentDispositionName is the download name.
+// ext includes the dot.
+func contentDispositionName(ext string) string {
+	return time.Now().UTC().Format("sage-download-20060102150405") + ext
 }

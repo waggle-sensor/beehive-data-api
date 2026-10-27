@@ -1,32 +1,28 @@
-package main
+// backend.go contains the Backend type and its associated functions for the tiered backend.
+package tiered
 
 import (
 	"context"
 	"fmt"
 	"time"
+
+	model "beehive-data-api/internal/query"
 )
 
-// TieredBackend routes a query across a hot and a cold tier.
+// Backend routes a query across a hot and a cold tier for the tiered backend.
 //
 // The watermark is a single instant: everything strictly before it lives in
 // cold storage, everything at or after it lives in hot. It is held in
-// NANOSECONDS, deliberately. Hot keeps nanosecond resolution (InfluxDB is
-// the real-time tier) while cold is microsecond (pyiceberg cannot store ns),
-// so a microsecond-rounded watermark would leave a sub-microsecond sliver at
-// the cut that is either served twice or not at all. Comparing in ns makes
-// the boundary exact.
-//
-// A consequence worth stating plainly: a tier-spanning result legitimately
-// carries MIXED precision -- ns-stamped records from hot, us-stamped from
-// cold. That is the migration's visible signature, not a defect.
-type TieredBackend struct {
-	Hot       Backend
-	Cold      Backend
+// NANOSECONDS so v3 cold and hot rows meet at exactly one half-open boundary.
+// Both tiers preserve nanosecond timestamps.
+type Backend struct {
+	Hot       model.Backend
+	Cold      model.Backend
 	Watermark time.Time
 }
 
-// Query routes to one tier, or splits across both and merges.
-func (backend *TieredBackend) Query(ctx context.Context, query *Query) (Results, error) {
+// Query routes to one tier, or splits across both and merges for the tiered backend.
+func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
 	start, err := parseQueryTime(query.Start, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("invalid start timestamp %q: %w", query.Start, err)
@@ -119,8 +115,8 @@ func parseQueryTime(s string, fallback time.Time) (time.Time, error) {
 // Lazy by construction: `second` is not touched until `first` is exhausted,
 // so a large result set never lands in memory.
 type tieredResults struct {
-	first    Results
-	second   Results
+	first    model.Results
+	second   model.Results
 	onSecond bool
 	err      error
 }
@@ -148,7 +144,7 @@ func (r *tieredResults) Close() error {
 }
 
 // Record returns the current row as a Record.
-func (r *tieredResults) Record() *Record {
+func (r *tieredResults) Record() *model.Record {
 	if r.onSecond {
 		return r.second.Record()
 	}
@@ -174,3 +170,6 @@ func (r *tieredResults) Next() bool {
 	}
 	return r.second.Next()
 }
+
+// Parts exposes the ordered child streams without transferring their ownership.
+func (r *tieredResults) Parts() []model.Results { return []model.Results{r.first, r.second} }

@@ -9,12 +9,13 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY *.go .
-RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o influxdb-data-api
+COPY main.go .
+COPY internal/ ./internal/
+RUN CGO_ENABLED=1 go build -tags=duckdb_arrow -ldflags="-s -w" -o beehive-data-api
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /build/influxdb-data-api /influxdb-data-api
-ENTRYPOINT [ "/influxdb-data-api" ]
+COPY --from=builder /build/beehive-data-api /beehive-data-api
+ENTRYPOINT [ "/beehive-data-api" ]
