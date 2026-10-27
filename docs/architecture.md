@@ -179,3 +179,15 @@ at most 10 million rows, rows sorted by plugin then vsn then time within a
 file, and plugin-pure row groups capped at 262,144 rows. Large plugins span
 multiple groups; small plugins can share files. This is warehouse writer
 policy, not a geometry constraint validated by the API on each request.
+
+## Resources
+
+These references cover the warehouse layout, stored VARIANT values, and
+Iceberg v3 support used by the cold storage architecture:
+
+- [DuckDB: the effect of Parquet row group sizes](https://duckdb.org/docs/2.0/guides/performance/file_formats#the-effect-of-row-group-sizes)
+- [DuckDB 2.0: VARIANT becomes a first-class citizen](https://duckdb.org/docs/2.0/whats_new_in_the_docs#variant-becomes-a-first-class-citizen)
+- [DuckDB VARIANT data type](https://duckdb.org/docs/2.0/sql/data_types/variant)
+- [Apache Parquet VARIANT encoding specification](https://github.com/apache/parquet-format/blob/master/VariantEncoding.md)
+- [VARIANT in Apache Iceberg](https://iceberg.apache.org/blog/variant-in-apache-iceberg/)
+- [DuckDB Iceberg extension: Iceberg v3 support](https://duckdb.org/docs/2.0/core_extensions/iceberg/writing_to_iceberg#iceberg-v3-support)
