@@ -1,4 +1,6 @@
-// backend.go contains the cold backend type and its associated functions.
+// backend.go reads one Iceberg snapshot through DuckDB. The metadata URL is
+// the pinned snapshot when the coordinator set one, otherwise the warehouse hint.
+
 package cold
 
 import (
@@ -20,8 +22,7 @@ import (
 	model "beehive-data-api/internal/query"
 )
 
-// Backend is the cold backend type.
-// Reads the Iceberg cold tier with DuckDB.
+// Backend reads the Iceberg cold tier with DuckDB.
 //
 // DuckDB's iceberg extension scans a metadata URL over HTTPS, using a
 // bearer token for Pelican. A newline-JSON response scans rows through
@@ -59,8 +60,7 @@ func (backend *Backend) Close() error {
 	return err
 }
 
-// NewBackend builds the cold backend.
-// Opens DuckDB and loads the httpfs and iceberg extensions.
+// NewBackend opens DuckDB and loads the httpfs and iceberg extensions.
 // The first call downloads those extensions; later connections only LOAD them.
 func NewBackend(warehouse, keyPath string, settings IOSettings) (*Backend, error) {
 	warehouse = strings.TrimRight(warehouse, "/")
@@ -153,13 +153,22 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 
 	profile.duration("auth_seconds", phaseStart)
 	phaseStart = coldProfileClock(profile)
-	stem, err := backend.readHint(ctx, tok)
-	if err != nil {
-		return nil, err
+	metadataURL := model.ColdMetadata(ctx)
+	if metadataURL == "" {
+		stem, err := backend.readHint(ctx, tok)
+		if err != nil {
+			return nil, err
+		}
+		metadataURL = fmt.Sprintf("%s/sage/obs/metadata/%s.metadata.json", backend.Warehouse, stem)
+	} else {
+		prefix := backend.Warehouse + "/sage/obs/metadata/"
+		if !strings.HasPrefix(metadataURL, prefix) || !strings.HasSuffix(metadataURL, ".metadata.json") ||
+			!validHintStem(strings.TrimSuffix(strings.TrimPrefix(metadataURL, prefix), ".metadata.json")) {
+			return nil, fmt.Errorf("managed metadata is outside the configured table")
+		}
 	}
 	profile.duration("hint_http_seconds", phaseStart)
 	phaseStart = coldProfileClock(profile)
-	metadataURL := fmt.Sprintf("%s/sage/obs/metadata/%s.metadata.json", backend.Warehouse, stem)
 	arrowResult := arrowio.WantsResult(ctx)
 	now := time.Now().UTC()
 	var statement string

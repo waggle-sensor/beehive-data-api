@@ -1,4 +1,5 @@
-// sql_test.go contains the tests for the cold SQL functions.
+// sql_test.go checks the SQL text for filters, time bounds, and the metadata shape.
+
 package cold
 
 import (

@@ -1,3 +1,6 @@
+// v3_http_test.go serves production SQL, scanning, and HTTP writers against a
+// local fixture. Only remote authentication and metadata discovery are replaced.
+
 package cold
 
 import (
@@ -73,7 +76,7 @@ func testV3HTTPResponses(t *testing.T, db *sql.DB, metadata string) {
 		{Timestamp: time.Unix(0, 1740787208000000001).UTC(), Name: "plugin.status", Value: "123", Meta: map[string]string{"plugin": "notes"}},
 		{Timestamp: time.Unix(0, 1740787208000000002).UTC(), Name: "plugin.flag", Value: true, Meta: map[string]string{}},
 	}}
-	tiered := &tiered.Backend{Cold: cold, Hot: hot, Watermark: time.Unix(0, 1740787208000000001).UTC()}
+	tiered := &tiered.Backend{Cold: cold, Hot: hot, Border: time.Unix(0, 1740787208000000001).UTC()}
 	for _, tc := range []struct {
 		name    string
 		backend model.Backend

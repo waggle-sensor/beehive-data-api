@@ -1,4 +1,5 @@
-// record_test.go contains the tests for the cold record functions.
+// record_test.go checks that VARIANT JSON keeps large integers intact.
+
 package cold
 
 import (

@@ -1,4 +1,7 @@
-// backend.go contains the Backend type and its associated functions for the hot backend.
+// backend.go reads the hot tier from Influx. A bucket whose name starts with
+// "_" is rejected. An aggregation without a window reports the range start
+// instead of each point's time.
+
 package hot
 
 import (
@@ -69,7 +72,8 @@ func (r *influxResults) Next() bool {
 	return r.err == nil
 }
 
-// convertToAPIRecord converts the influx record to an API record.
+// convertToAPIRecord maps one Flux row onto the public record. The measurement
+// name and _value are required to have their Flux types.
 func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*model.Record, error) {
 	apirec := &model.Record{}
 
@@ -90,7 +94,8 @@ func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*mod
 	return apirec, nil
 }
 
-// buildMetaFromRecord builds the meta from the influx record.
+// buildMetaFromRecord copies Flux tags into the public meta map. Internal
+// fields, and the leaked table and result columns, are left out.
 func buildMetaFromRecord(rec *influxdb2query.FluxRecord) map[string]string {
 	meta := make(map[string]string)
 

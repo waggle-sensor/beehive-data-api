@@ -1,4 +1,6 @@
-// settings.go contains the cold settings type and its associated functions.
+// settings.go fixes the cold DuckDB session. Two CPU threads and 3GB are not
+// startup flags. Async threads and read-ahead are the only adjustable I/O settings.
+
 package cold
 
 import (
@@ -13,12 +15,13 @@ type IOSettings struct {
 	ReadAheadDepth int
 }
 
-// defaultColdIOSettings returns the default cold I/O settings.
+// defaultColdIOSettings is eight async threads and memory-budgeted read-ahead.
 func defaultColdIOSettings() IOSettings {
 	return IOSettings{AsyncThreads: 8, ReadAheadDepth: -1}
 }
 
-// ParseIOSettings parses the cold I/O settings.
+// ParseIOSettings accepts 1..256 async threads. Read-ahead is -1 for the
+// memory-budgeted default or 0 to disable lookahead.
 func ParseIOSettings(async, ahead string) (IOSettings, error) {
 	threads, err := strconv.Atoi(async)
 	if err != nil || threads < 1 || threads > 256 {
@@ -31,7 +34,8 @@ func ParseIOSettings(async, ahead string) (IOSettings, error) {
 	return IOSettings{threads, depth}, nil
 }
 
-// coldDuckDBRuntimeSetup returns the runtime setup for the DuckDB.
+// coldDuckDBRuntimeSetup is the per-connection session: UTC, two threads,
+// a 3GB limit, Arrow IPC 1.0, and the configured I/O settings.
 func coldDuckDBRuntimeSetup(settings *IOSettings) []string {
 	config := defaultColdIOSettings()
 	if settings != nil {
@@ -45,7 +49,7 @@ func coldDuckDBRuntimeSetup(settings *IOSettings) []string {
 	}
 }
 
-// coldDuckDBSetup returns the setup for the DuckDB.
+// coldDuckDBSetup is the runtime session plus the httpfs and iceberg extensions.
 func coldDuckDBSetup(settings *IOSettings) []string {
 	return append(coldDuckDBRuntimeSetup(settings), "INSTALL httpfs", "LOAD httpfs", "INSTALL iceberg", "LOAD iceberg")
 }

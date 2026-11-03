@@ -72,14 +72,21 @@ assume arbitrary regex syntax is supported across both tiers.
 
 ### Backend support
 
-| Capability | Hot only | Cold only | Spans watermark |
+| Capability | Hot only | Cold only | Spans border |
 | --- | --- | --- | --- |
 | Ordinary filtered extract | Yes | Yes | Yes, cold then hot |
 | Absolute bounds | Yes | Yes | Required |
 | Direct relative bounds | Supported by hot-only service | No | No, including hot ranges in tiered mode |
 | `head` or `tail` | Yes, per Flux table | Yes, per series | Rejected |
 | Aggregation | Yes | Rejected | Rejected |
-| Bucket override | Yes | Ignored | Applies only to hot part |
+| Bucket override in static mode | Yes | Ignored | Applies only to hot part |
+
+With `COLD_FRONTIER=dynamic`, every stored query is checked against the
+coordinator's declared coverage and configured bucket, even when its range is
+entirely hot. An override to another bucket or a start before coverage is
+rejected. The API acquires one consistent routing border and cold snapshot per
+request; callers do not need to choose a storage tier. See
+[frontier configuration](configuration.md#dynamic-vs-static-cold-frontier).
 
 Without a window, supported hot functions are `mean`, `min`, `max`, `sum`,
 and `count`. With a window, the function and interval are passed to Flux's
@@ -201,10 +208,16 @@ Errors use plain text, not a structured JSON error envelope.
 | Request exceeds 4096 bytes | HTTP 400; message incorrectly says “must be <1KB” |
 | Backend startup/query error, invalid backend filter/time, unsupported cold operation | HTTP 500 |
 | Arrow encoding/fetch failure after headers | HTTP framing is aborted; clients must treat it as failure |
-| NDJSON iteration failure after headers | Error is logged; a partial response can finish without a distinct HTTP error |
+| NDJSON iteration failure or reader-lease loss after headers | Error is logged and HTTP framing is aborted; clients must treat the extract as failed |
 
-HTTP 200 and valid individual rows do not establish completeness for NDJSON.
-When completeness matters, verify expected counts/content independently.
+HTTP 200 and valid individual rows do not establish completeness. Clients must
+consume the entire response and check transport/decoder errors; discard partial
+output from a failed extract. When completeness matters, verify expected
+counts/content independently. Dynamic reader leases renew during healthy
+requests, so their default 30-minute duration is not a maximum query time. If
+renewal fails through the last confirmed expiry, the API cancels the query.
+Retry with a new request to acquire current routing; coordinator failures do not
+fall back to static routing.
 Large cold queries may wait for scan and sort before producing their first
 batch; an open connection alone is not evidence of a stall.
 

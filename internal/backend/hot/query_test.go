@@ -1,4 +1,5 @@
-// influx_backend_test.go contains the tests for the Backend type.
+// query_test.go checks the Flux script, including the bucket override and rejected shapes.
+
 package hot
 
 import (

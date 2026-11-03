@@ -1,3 +1,7 @@
+// Command beehive-data-api serves measurements from InfluxDB and, when a
+// warehouse is configured, an Iceberg cold tier. Cold routing stays off
+// until COLD_WAREHOUSE is set.
+
 package main
 
 import (
@@ -29,12 +33,21 @@ func main() {
 	coldAsyncThreads := flag.String("cold.async-threads", getenv("COLD_ASYNC_THREADS", "8"), "cold DuckDB asynchronous I/O threads (1..256)")
 	coldReadAhead := flag.String("cold.read-ahead-depth", getenv("COLD_READ_AHEAD_DEPTH", "-1"), "cold DuckDB lookahead: -1 for memory-budgeted automatic, 0 for none")
 	coldProfileDir := flag.String("cold.profile-dir", getenv("COLD_PROFILE_DIR", ""), "optional local parent directory for cold Arrow operator profiles and timings")
-	coldWatermark := flag.String("cold.watermark", getenv("COLD_WATERMARK", ""), "RFC3339 instant; data before it is served from cold, at or after from hot")
+	coldFrontier := flag.String("cold.frontier", getenv("COLD_FRONTIER", "static"), "cold frontier mode: static or dynamic")
+	coldBorder := flag.String("cold.border", getenv("COLD_BORDER", ""), "RFC3339 instant; data before it is served from cold, at or after from hot")
+	loaderURL := flag.String("hot-to-cold-loader.url", getenv("HOT_TO_COLD_LOADER_URL", ""), "managed hot to cold loader coordination URL")
+	loaderToken := flag.String("hot-to-cold-loader.reader-token", getenv("HOT_TO_COLD_LOADER_READER_TOKEN", ""), "managed read coordination token")
+	loaderOwner := flag.String("hot-to-cold-loader.reader-owner", getenv("HOT_TO_COLD_LOADER_READER_OWNER", ""), "unique managed reader owner (pod UID)")
 	pelicanKey := flag.String("pelican.key", getenv("PELICAN_KEY_PATH", ""), "PEM key that signs SciTokens for the cold warehouse")
 	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
 	streamHeartbeatDuration := flag.Duration("stream.heartbeat-duration", mustParseDuration(getenv("STREAM_HEARTBEAT_DURATION", "15s")), "stream heartbeat duration")
 	flag.Parse()
 	compression, err := arrowio.ParseCompression(*arrowCompressionFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	frontier, err := tiered.ParseFrontier(tiered.FrontierOptions{Mode: *coldFrontier, Warehouse: *coldWarehouse, Border: *coldBorder, URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner, Bucket: *influxdbBucket})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -56,15 +69,8 @@ func main() {
 	// behaves exactly as it always has, so the single-tier path stays the
 	// default and its tests keep covering what ships by default.
 	if *coldWarehouse != "" {
-		if *coldWatermark == "" {
-			log.Fatal("cold.warehouse requires cold.watermark")
-		}
 		if *pelicanKey == "" {
 			log.Fatal("cold.warehouse requires pelican.key")
-		}
-		watermark, err := time.Parse(time.RFC3339, *coldWatermark)
-		if err != nil {
-			log.Fatalf("invalid cold.watermark %q: %s", *coldWatermark, err)
 		}
 		ioSettings, err := cold.ParseIOSettings(*coldAsyncThreads, *coldReadAhead)
 		if err != nil {
@@ -82,12 +88,16 @@ func main() {
 		if coldBackend.ProfileDir != "" {
 			log.Printf("cold query profiling enabled in %s", coldBackend.ProfileDir)
 		}
-		log.Printf("tiered backend: duckdb iceberg_scan on %s, watermark %s", *coldWarehouse, watermark.Format(time.RFC3339Nano))
-		backend = &tiered.Backend{
-			Hot:       backend,
-			Cold:      coldBackend,
-			Watermark: watermark,
+		if frontier.Mode == "static" {
+			log.Printf("tiered backend: duckdb iceberg_scan on %s, border %s", *coldWarehouse, frontier.Border.Format(time.RFC3339Nano))
 		}
+		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border}
+		if frontier.Mode == "dynamic" {
+			tieredBackend.Coordinator = &tiered.Coordinator{URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
+				Bucket: *influxdbBucket, Warehouse: *coldWarehouse}
+			log.Printf("dynamic tiered routing enabled; frontier and snapshot pinned per request")
+		}
+		backend = tieredBackend
 	}
 
 	// create query service
@@ -112,7 +122,8 @@ func main() {
 	}
 }
 
-// getenv is a helper function to get an environment variable with a fallback
+// getenv returns the environment value, including an explicit empty value.
+// fallback is used only when the variable is unset.
 func getenv(key string, fallback string) string {
 	if s, ok := os.LookupEnv(key); ok {
 		return s
@@ -120,7 +131,7 @@ func getenv(key string, fallback string) string {
 	return fallback
 }
 
-// mustParseDuration is a helper function to parse a duration with a fallback
+// mustParseDuration parses a Go duration and stops the process on invalid syntax.
 func mustParseDuration(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil {

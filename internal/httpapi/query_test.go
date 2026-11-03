@@ -1,4 +1,6 @@
-// query_test.go contains the tests for the Service type.
+// query_test.go checks NDJSON and Arrow responses, the body limit, and that a
+// failure after the status line aborts the response.
+
 package httpapi
 
 import (
@@ -298,9 +300,9 @@ func TestArrowTieredResponse(t *testing.T) {
 		Meta:      map[string]string{"vsn": "W0A0"},
 	}
 	svc := NewService(&ServiceConfig{Backend: &tiered.Backend{
-		Cold:      &testutil.Backend{Records: []*model.Record{cold}},
-		Hot:       &testutil.Backend{Records: []*model.Record{hot}},
-		Watermark: wm,
+		Cold:   &testutil.Backend{Records: []*model.Record{cold}},
+		Hot:    &testutil.Backend{Records: []*model.Record{hot}},
+		Border: wm,
 	}})
 	r := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"start":"2025-04-30T00:00:00Z","end":"2025-05-02T00:00:00Z"}`))
 	r.Header.Set("Accept", arrowio.MIME)
@@ -357,6 +359,22 @@ func TestArrowLateErrorAbortsResponse(t *testing.T) {
 		}
 		if w.Body.Len() == 0 {
 			t.Fatal("test never emitted a batch")
+		}
+	}()
+	svc.ServeHTTP(w, r)
+}
+
+func TestNDJSONDeadlineAbortsResponse(t *testing.T) {
+	results := &testutil.Results{Records: []*model.Record{{Timestamp: time.Now(), Name: "m", Value: 1}}, ErrValue: context.DeadlineExceeded}
+	svc := NewService(&ServiceConfig{Backend: fixedResultsBackend{results}})
+	r := httptest.NewRequest("POST", "/", strings.NewReader(`{"start":"2025-03-01T00:00:00Z"}`))
+	w := httptest.NewRecorder()
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("abort=%v, want http.ErrAbortHandler", got)
+		}
+		if !results.Closed || w.Body.Len() == 0 {
+			t.Fatal("expected partial output and closed resources")
 		}
 	}()
 	svc.ServeHTTP(w, r)

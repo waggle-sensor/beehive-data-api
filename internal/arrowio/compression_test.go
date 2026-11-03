@@ -1,4 +1,5 @@
-// compression_test.go contains the tests for the arrow compression.
+// compression_test.go checks Arrow buffer compression selection and round trip.
+
 package arrowio
 
 import (

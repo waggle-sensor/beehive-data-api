@@ -1,4 +1,5 @@
-// arrow_public_schema_test.go contains the tests for the public schema across storage tiers.
+// arrow_public_schema_test.go checks that hot and cold rows share one public Arrow schema.
+
 package httpapi
 
 import (
@@ -23,15 +24,15 @@ import (
 // Check the HTTP contract without a Python client: record-built hot results,
 // direct cold batches, and a stream spanning both must expose one value field.
 func TestPublicSchemaAcrossStorageTiers(t *testing.T) {
-	watermark := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)
-	cold := &publicSchemaBackend{native: true, records: []*model.Record{{Timestamp: watermark.Add(-time.Hour), Name: "cold", Value: 1.25}}}
-	hot := &publicSchemaBackend{records: []*model.Record{{Timestamp: watermark.Add(time.Hour), Name: "hot", Value: "image.jpg"}}}
+	border := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)
+	cold := &publicSchemaBackend{native: true, records: []*model.Record{{Timestamp: border.Add(-time.Hour), Name: "cold", Value: 1.25}}}
+	hot := &publicSchemaBackend{records: []*model.Record{{Timestamp: border.Add(time.Hour), Name: "hot", Value: "image.jpg"}}}
 	for _, tc := range []struct {
 		name    string
 		backend model.Backend
 		rows    int
 	}{
-		{"hot", hot, 1}, {"cold", cold, 1}, {"both", &tiered.Backend{Hot: hot, Cold: cold, Watermark: watermark}, 2},
+		{"hot", hot, 1}, {"cold", cold, 1}, {"both", &tiered.Backend{Hot: hot, Cold: cold, Border: border}, 2},
 	} {
 		for _, accept := range []string{"", arrowio.MIME, arrowio.MIME + "; sage-schema=2"} {
 			t.Run(tc.name+"/"+accept, func(t *testing.T) {

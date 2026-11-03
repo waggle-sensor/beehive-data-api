@@ -1,28 +1,42 @@
-// backend.go contains the Backend type and its associated functions for the tiered backend.
+// backend.go splits one query at a nanosecond border. Cold is read first and
+// hot continues only when the window crosses the border. Aggregations, head,
+// tail, and relative timestamps are refused because they cannot be split.
+
 package tiered
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	model "beehive-data-api/internal/query"
 )
 
-// Backend routes a query across a hot and a cold tier for the tiered backend.
+// Backend routes static and dynamically coordinated queries across hot/cold tiers.
 //
-// The watermark is a single instant: everything strictly before it lives in
+// In static mode Border is the boundary; dynamic mode uses Coordinator.
+// The boundary is a single instant: everything strictly before it lives in
 // cold storage, everything at or after it lives in hot. It is held in
 // NANOSECONDS so v3 cold and hot rows meet at exactly one half-open boundary.
 // Both tiers preserve nanosecond timestamps.
 type Backend struct {
-	Hot       model.Backend
-	Cold      model.Backend
-	Watermark time.Time
+	Hot         model.Backend
+	Cold        model.Backend
+	Border      time.Time
+	Coordinator *Coordinator
 }
 
 // Query routes to one tier, or splits across both and merges for the tiered backend.
 func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
+	if backend.Coordinator != nil {
+		return backend.Coordinator.query(ctx, query, backend.queryAt)
+	}
+	return backend.queryAt(ctx, query, backend.Border)
+}
+
+// queryAt routes using the request's chosen boundary; it never mutates shared configuration.
+func (backend *Backend) queryAt(ctx context.Context, query *model.Query, border time.Time) (model.Results, error) {
 	start, err := parseQueryTime(query.Start, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("invalid start timestamp %q: %w", query.Start, err)
@@ -34,10 +48,10 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 	}
 
 	// `end` is EXCLUSIVE, matching the wire protocol. So a query ending
-	// exactly at the watermark is entirely cold, and one starting exactly
+	// exactly at the border is entirely cold, and one starting exactly
 	// at it is entirely hot.
-	coldOnly := !end.After(backend.Watermark)
-	hotOnly := !start.Before(backend.Watermark)
+	coldOnly := !end.After(border)
+	hotOnly := !start.Before(border)
 
 	switch {
 	case coldOnly:
@@ -46,14 +60,14 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 		return backend.Hot.Query(ctx, query)
 	}
 
-	// Spanning the watermark from here on.
+	// Spanning the border from here on.
 
 	// Aggregations cannot be split. A mean of two per-tier means is wrong
 	// without the counts to weight them, and silently returning a plausible
 	// wrong number is worse than refusing.
 	if query.Func != nil {
 		return nil, fmt.Errorf("aggregation %q spans the hot/cold boundary at %s and cannot be computed across tiers; narrow the range to one side",
-			*query.Func, backend.Watermark.Format(time.RFC3339Nano))
+			*query.Func, border.Format(time.RFC3339Nano))
 	}
 
 	// head/tail are PER SERIES in Flux, not global -- they are table
@@ -65,14 +79,14 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 	// option and keeps the semantics the client already relies on.
 	if query.Head != nil || query.Tail != nil {
 		return nil, fmt.Errorf("head/tail spans the hot/cold boundary at %s; these are per-series limits and cannot be merged across tiers; narrow the range to one side",
-			backend.Watermark.Format(time.RFC3339Nano))
+			border.Format(time.RFC3339Nano))
 	}
 
 	coldQuery := *query
-	coldQuery.End = backend.Watermark.Format(time.RFC3339Nano)
+	coldQuery.End = border.Format(time.RFC3339Nano)
 
 	hotQuery := *query
-	hotQuery.Start = backend.Watermark.Format(time.RFC3339Nano)
+	hotQuery.Start = border.Format(time.RFC3339Nano)
 
 	coldResults, err := backend.Cold.Query(ctx, &coldQuery)
 	if err != nil {
@@ -86,7 +100,7 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 	}
 
 	// Cold first: it holds the older half, and the two ranges are disjoint
-	// at the watermark, so concatenation preserves time order without
+	// at the border, so concatenation preserves time order without
 	// buffering either side.
 	return &tieredResults{first: coldResults, second: hotResults}, nil
 }
@@ -173,3 +187,46 @@ func (r *tieredResults) Next() bool {
 
 // Parts exposes the ordered child streams without transferring their ownership.
 func (r *tieredResults) Parts() []model.Results { return []model.Results{r.first, r.second} }
+
+// FrontierOptions holds startup settings for static or dynamic cold routing.
+type FrontierOptions struct {
+	Mode, Warehouse, Border, URL, Token, Owner, Bucket string
+}
+
+// FrontierConfig is the validated frontier mode and optional static boundary.
+type FrontierConfig struct {
+	Mode   string
+	Border time.Time
+}
+
+// ParseFrontier validates startup settings without opening either storage tier.
+func ParseFrontier(options FrontierOptions) (FrontierConfig, error) {
+	config := FrontierConfig{Mode: strings.ToLower(strings.TrimSpace(options.Mode))}
+	if config.Mode != "static" && config.Mode != "dynamic" {
+		return config, fmt.Errorf("cold.frontier must be static or dynamic")
+	}
+	if config.Mode == "dynamic" {
+		if options.Warehouse == "" || options.URL == "" || options.Token == "" || options.Owner == "" || options.Bucket == "" {
+			return config, fmt.Errorf("dynamic cold.frontier requires cold.warehouse, hot-to-cold-loader.url, hot-to-cold-loader.reader-token, hot-to-cold-loader.reader-owner and influxdb.bucket")
+		}
+		if options.Border != "" {
+			return config, fmt.Errorf("cold.border must be unset with dynamic cold.frontier")
+		}
+		return config, nil
+	}
+	if options.URL != "" || options.Token != "" || options.Owner != "" {
+		return config, fmt.Errorf("hot-to-cold-loader settings require dynamic cold.frontier")
+	}
+	if options.Warehouse == "" {
+		if options.Border != "" {
+			return config, fmt.Errorf("cold.border requires cold.warehouse")
+		}
+		return config, nil // Default hot-only deployment.
+	}
+	var err error
+	config.Border, err = time.Parse(time.RFC3339Nano, options.Border)
+	if err != nil {
+		return config, fmt.Errorf("static cold.frontier requires an RFC3339 cold.border: %w", err)
+	}
+	return config, nil
+}

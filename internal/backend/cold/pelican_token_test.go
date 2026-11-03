@@ -1,4 +1,6 @@
-// pelican_token_test.go contains the tests for the pelican token type.
+// pelican_token_test.go checks the signed claims and the read scope derived
+// from the warehouse URL.
+
 package cold
 
 import (

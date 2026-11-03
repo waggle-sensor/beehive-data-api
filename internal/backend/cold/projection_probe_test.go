@@ -1,4 +1,6 @@
-// projection_probe_test.go contains tests that probe the cold projection.
+// projection_probe_test.go records which columns DuckDB reads. It is a
+// diagnostic, not a latency gate.
+
 package cold
 
 import (

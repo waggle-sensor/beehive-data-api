@@ -1,9 +1,11 @@
-// query.go contains the code for the hot backend query.
+// query.go builds the Flux script for one hot query. The bucket is always
+// the configured bucket, and a name starting with "_" is rejected.
+
 package hot
 
 import (
-	"fmt"
 	model "beehive-data-api/internal/query"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -87,8 +89,7 @@ func buildFluxQuery(bucket string, query *model.Query) (string, error) {
 	return strings.Join(parts, " |> "), nil
 }
 
-// buildRangeSubquery builds the range subquery for the influx query.
-// for the hot backend.
+// buildRangeSubquery is the Flux range() clause. End is Flux stop, which is exclusive.
 func buildRangeSubquery(query *model.Query) (string, error) {
 	var parts []string
 	if !model.IsValidFilterString(query.Start) {
@@ -115,8 +116,8 @@ var fieldRenameMap = map[string]string{
 	"name": "_measurement",
 }
 
-// buildFilterSubquery builds the filter subquery for the influx query.
-// for the hot backend.
+// buildFilterSubquery is one Flux filter() per field. Public names are
+// translated, including name to _measurement.
 func buildFilterSubquery(query *model.Query) (string, error) {
 	var parts []string
 

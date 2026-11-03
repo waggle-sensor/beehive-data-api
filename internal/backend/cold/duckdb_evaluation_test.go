@@ -1,4 +1,6 @@
-// duckdb_evaluation_test.go contains tests that evaluate DuckDB performance.
+// duckdb_evaluation_test.go records DuckDB timing for a cold query. It is a
+// diagnostic, not a latency gate.
+
 package cold
 
 import (

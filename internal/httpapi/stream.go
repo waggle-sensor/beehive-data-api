@@ -1,4 +1,6 @@
-// stream.go contains the StreamService type and its associated functions for the public HTTP API.
+// stream.go serves live measurements as server-sent events. Each connection
+// has its own exclusive queue and acknowledges messages as it receives them.
+
 package httpapi
 
 import (
@@ -24,7 +26,8 @@ var (
 	})
 )
 
-// extractFilterTopicsFromName extracts the topics from the name filter.
+// extractFilterTopicsFromName uses the name filter as RabbitMQ binding keys
+// and removes it, so the remaining entries are metadata matchers.
 func extractFilterTopicsFromName(filter map[string]string) []string {
 	if name, ok := filter["name"]; ok {
 		delete(filter, "name")
@@ -33,7 +36,8 @@ func extractFilterTopicsFromName(filter map[string]string) []string {
 	return []string{"#"}
 }
 
-// buildMatchers builds the matchers from the filter.
+// buildMatchers compiles each remaining filter value as a regular expression
+// matched against that metadata key.
 func buildMatchers(filter map[string]string) (map[string]*regexp.Regexp, error) {
 	matchers := map[string]*regexp.Regexp{}
 
@@ -48,7 +52,7 @@ func buildMatchers(filter map[string]string) (map[string]*regexp.Regexp, error) 
 	return matchers, nil
 }
 
-// Message is the message for the stream service.
+// Message is one live measurement written to the client.
 type Message struct {
 	Name      string            `json:"name"`
 	Timestamp time.Time         `json:"timestamp"`
@@ -56,7 +60,8 @@ type Message struct {
 	Meta      map[string]string `json:"meta"`
 }
 
-// unmarshalMessage unmarshals the message from the byte slice.
+// unmarshalMessage reads the broker payload. Its timestamp is nanoseconds in "ts"
+// and its measurement value is "val".
 func unmarshalMessage(b []byte, msg *Message) error {
 	var obj struct {
 		Name      string            `json:"name"`
@@ -76,7 +81,8 @@ func unmarshalMessage(b []byte, msg *Message) error {
 	return nil
 }
 
-// matchMessage matches the message against the matchers.
+// matchMessage reports whether every matcher matches the corresponding metadata value.
+// A missing key is an empty string and usually fails the match.
 func matchMessage(matchers map[string]*regexp.Regexp, msg *Message) bool {
 	for key, matcher := range matchers {
 		if !matcher.MatchString(msg.Meta[key]) {
@@ -86,7 +92,7 @@ func matchMessage(matchers map[string]*regexp.Regexp, msg *Message) bool {
 	return true
 }
 
-// getFilterForQueryValues gets the filter for the query values.
+// getFilterForQueryValues keeps the first value of each query key.
 func getFilterForQueryValues(values url.Values) map[string]string {
 	filter := make(map[string]string)
 	for k := range values {
@@ -95,13 +101,14 @@ func getFilterForQueryValues(values url.Values) map[string]string {
 	return filter
 }
 
-// StreamService is the service for the stream service.
+// StreamService opens a RabbitMQ connection per HTTP request.
 type StreamService struct {
 	RabbitMQURL       string
 	HeartbeatDuration time.Duration
 }
 
-// ServeHTTP serves the HTTP request.
+// ServeHTTP opens one exclusive queue, binds the requested names, and writes
+// matching messages as SSE. A client disconnect ends the stream.
 func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -148,15 +155,15 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	ch, err := conn.Channel()
+	channel, err := conn.Channel()
 	if err != nil {
 		log.Printf("failed to open rabbitmq channel: %s", err)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
-	defer ch.Close()
+	defer channel.Close()
 
-	queue, err := ch.QueueDeclare("", false, false, true, false, nil)
+	queue, err := channel.QueueDeclare("", false, false, true, false, nil)
 	if err != nil {
 		log.Printf("failed to declare queue: %s", err)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
@@ -164,14 +171,14 @@ func (svc *StreamService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, topic := range topics {
-		if err := ch.QueueBind(queue.Name, topic, "waggle.msg", false, nil); err != nil {
+		if err := channel.QueueBind(queue.Name, topic, "waggle.msg", false, nil); err != nil {
 			log.Printf("failed to bind queue %s to exchange", queue.Name)
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 			return
 		}
 	}
 
-	messages, err := ch.Consume(queue.Name, "", true, false, false, false, nil)
+	messages, err := channel.Consume(queue.Name, "", true, false, false, false, nil)
 	if err != nil {
 		log.Printf("failed to consume queue %s", queue.Name)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)

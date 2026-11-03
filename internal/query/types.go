@@ -1,4 +1,6 @@
-// types.go is the query contract: the request body, a measurement record, and the Backend and Results interfaces every store implements.
+// types.go is the query contract: the request body, a measurement record, and
+// the Backend and Results interfaces every store implements.
+
 package query
 
 import (

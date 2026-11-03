@@ -1,4 +1,6 @@
-// arrow.go contains the cold arrow state type and its associated functions.
+// arrow.go owns one DuckDB connection for an Arrow query. Queries take the
+// connection one at a time because the HTTP secret is database-global.
+
 package cold
 
 import (

@@ -1,4 +1,7 @@
-// response.go contains the code for the arrow response.
+// response.go writes query results as NDJSON or an Arrow stream. Compression
+// is Arrow buffer compression, selected by the request, and is not a
+// Content-Encoding of the HTTP body.
+
 package arrowio
 
 import (
@@ -20,14 +23,12 @@ import (
 	model "beehive-data-api/internal/query"
 )
 
-// MIME is the Arrow IPC streaming format.
-// It is not the random-access file format, whose footer arrives last.
-// random-access file format, whose footer arrives last.
+// MIME is the Arrow IPC streaming format. It is not the random-access file
+// format, whose footer arrives last.
 const MIME = "application/vnd.apache.arrow.stream"
 
-// Compression is the compression for the arrow response.
-// Belongs to the IPC record-batch buffers, not HTTP Content-Encoding.
-// Zstd is the Arrow default. An operator can select none or lz4 at startup.
+// Compression names an Arrow IPC buffer codec. It is not an HTTP Content-Encoding.
+// Zstd is the default. An operator can select none or lz4 at startup.
 type Compression string
 
 // Compression constants.
@@ -158,7 +159,7 @@ func writeArrowAny(writer *ipc.Writer, results model.Results) (int, error) {
 				return n, err
 			}
 		}
-		return n, nil
+		return n, results.Err()
 	}
 	if batches, ok := results.(arrowBatchReader); ok {
 		return WriteReader(writer, batches.ArrowReader())

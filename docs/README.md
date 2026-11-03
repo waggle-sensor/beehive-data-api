@@ -17,6 +17,7 @@ updates.
 ## Guides
 
 - [API](api.md): request fields, filters, tier-specific capabilities, Arrow/NDJSON, errors, SSE.
+- [Dynamic vs Static Cold Frontier](configuration.md#dynamic-vs-static-cold-frontier): border selection, snapshot pinning and renewable reader leases.
 - [Configuration](configuration.md): all startup flags and environment variables, defaults and fixed engine settings.
 - [Architecture](architecture.md): package boundaries, query execution, resource ownership and cold storage contracts.
 - [Operations](operations.md): local/Docker startup, cold warehouse setup, metrics, profiling and troubleshooting.

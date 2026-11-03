@@ -1,4 +1,6 @@
-// backend_test.go contains the tests for the Backend type.
+// backend_test.go checks the nanosecond border, lazy cold-then-hot merge, and
+// the queries the tiered backend refuses to split.
+
 package tiered
 
 import (
@@ -47,9 +49,9 @@ func rec(t *testing.T, ts string, name string) *model.Record {
 }
 
 // newTiered creates a new tiered backend.
-func newTiered(t *testing.T, hot, cold *recordingBackend, watermark string) *Backend {
+func newTiered(t *testing.T, hot, cold *recordingBackend, border string) *Backend {
 	t.Helper()
-	return &Backend{Hot: hot, Cold: cold, Watermark: mustTime(t, watermark)}
+	return &Backend{Hot: hot, Cold: cold, Border: mustTime(t, border)}
 }
 
 // TestTieredRouting tests the tiered routing.
@@ -63,12 +65,12 @@ func TestTieredRouting(t *testing.T) {
 		wantHot  int
 		wantCold int
 	}{
-		// `end` is EXCLUSIVE, so a range ending exactly at the watermark
+		// `end` is EXCLUSIVE, so a range ending exactly at the border
 		// holds no hot data at all and must not pay for a hot query.
 		{"entirely before", "2025-05-01T00:00:00Z", "2025-05-10T00:00:00Z", 0, 1},
-		{"ending exactly at the watermark", "2025-05-01T00:00:00Z", wm, 0, 1},
+		{"ending exactly at the border", "2025-05-01T00:00:00Z", wm, 0, 1},
 		{"entirely after", "2025-05-20T00:00:00Z", "2025-05-25T00:00:00Z", 1, 0},
-		{"starting exactly at the watermark", wm, "2025-05-25T00:00:00Z", 1, 0},
+		{"starting exactly at the border", wm, "2025-05-25T00:00:00Z", 1, 0},
 		{"spanning", "2025-05-10T00:00:00Z", "2025-05-20T00:00:00Z", 1, 1},
 		// No end means no upper bound, which always reaches into hot.
 		{"open-ended from cold", "2025-05-01T00:00:00Z", "", 1, 1},
@@ -131,16 +133,16 @@ func TestTieredSplitIsExactAtTheBoundary(t *testing.T) {
 	}
 }
 
-// TestTieredWatermarkIsNanosecondExact tests the tiered watermark is nanosecond exact.
-// The watermark is compared in nanoseconds on purpose: hot holds ns and
+// TestTieredBorderIsNanosecondExact tests the tiered border is nanosecond exact.
+// The border is compared in nanoseconds on purpose: hot holds ns and
 // cold holds us, so a us-rounded boundary would strand a sub-us sliver.
-func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
+func TestTieredBorderIsNanosecondExact(t *testing.T) {
 	const wm = "2025-05-15T00:00:00.000000500Z"
 	hot := &recordingBackend{}
 	cold := &recordingBackend{}
 	backend := newTiered(t, hot, cold, wm)
 
-	// Ends 1ns before the watermark: entirely cold, no hot query.
+	// Ends 1ns before the border: entirely cold, no hot query.
 	results, err := backend.Query(context.Background(), &model.Query{
 		Start: "2025-05-15T00:00:00Z",
 		End:   "2025-05-15T00:00:00.000000499Z",
@@ -151,7 +153,7 @@ func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
 	results.Close()
 
 	if hot.calls != 0 {
-		t.Errorf("hot was queried for a range ending 1ns before the watermark")
+		t.Errorf("hot was queried for a range ending 1ns before the border")
 	}
 	if cold.calls != 1 {
 		t.Errorf("cold calls = %d, want 1", cold.calls)
@@ -171,7 +173,7 @@ func TestTieredWatermarkIsNanosecondExact(t *testing.T) {
 	results2.Close()
 
 	if cold2.calls != 0 {
-		t.Errorf("cold was queried for a range starting after the watermark")
+		t.Errorf("cold was queried for a range starting after the border")
 	}
 	if hot2.calls != 1 {
 		t.Errorf("hot calls = %d, want 1", hot2.calls)
@@ -343,5 +345,51 @@ func TestTieredClosesColdWhenHotFailsToStart(t *testing.T) {
 	}
 	if cold.calls != 1 {
 		t.Fatalf("cold should have been queried first")
+	}
+}
+
+func TestColdFrontierConfiguration(t *testing.T) {
+	dynamic := FrontierOptions{Mode: "dynamic", Warehouse: "warehouse", URL: "http://loader", Token: "secret", Owner: "api", Bucket: "waggle"}
+	for _, field := range []string{"warehouse", "url", "token", "owner", "bucket", "border"} {
+		t.Run("dynamic/"+field, func(t *testing.T) {
+			o := dynamic
+			switch field {
+			case "warehouse":
+				o.Warehouse = ""
+			case "url":
+				o.URL = ""
+			case "token":
+				o.Token = ""
+			case "owner":
+				o.Owner = ""
+			case "bucket":
+				o.Bucket = ""
+			case "border":
+				o.Border = "2025-05-01T00:00:00Z"
+			}
+			if _, err := ParseFrontier(o); err == nil {
+				t.Fatal("invalid configuration accepted")
+			}
+		})
+	}
+	if c, err := ParseFrontier(dynamic); err != nil || c.Mode != "dynamic" || !c.Border.IsZero() {
+		t.Fatal(c, err)
+	}
+	border := "2025-05-01T00:00:00.000000194Z"
+	c, err := ParseFrontier(FrontierOptions{Mode: "static", Warehouse: "warehouse", Border: border})
+	if err != nil || c.Border.Format(time.RFC3339Nano) != border {
+		t.Fatal(c, err)
+	}
+	if _, err := ParseFrontier(FrontierOptions{Mode: "static"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []FrontierOptions{
+		{Mode: ""}, {Mode: "auto"}, {Mode: "static", Warehouse: "warehouse"},
+		{Mode: "static", Warehouse: "warehouse", Border: "invalid"}, {Mode: "static", Border: border},
+		{Mode: "static", URL: "loader"}, {Mode: "static", Token: "secret"}, {Mode: "static", Owner: "api"},
+	} {
+		if _, err := ParseFrontier(o); err == nil {
+			t.Fatal("invalid configuration accepted", o)
+		}
 	}
 }

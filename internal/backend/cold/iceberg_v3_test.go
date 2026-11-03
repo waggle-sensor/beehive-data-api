@@ -1,4 +1,5 @@
-// iceberg_v3_test.go contains the tests for the cold Iceberg v3.
+// iceberg_v3_test.go checks a local Iceberg v3 write and the cold read of that table.
+
 package cold
 
 import (

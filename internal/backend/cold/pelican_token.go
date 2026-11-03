@@ -1,4 +1,6 @@
-// pelican_token.go contains the pelican token type and its associated functions.
+// pelican_token.go mints the read token DuckDB presents to Pelican. The issuer,
+// key ID, and audience are fixed so the token matches the warehouse's trust.
+
 package cold
 
 import (
@@ -57,8 +59,8 @@ func (c sciClaims) GetAudience() (jwt.ClaimStrings, error) {
 	return jwt.ClaimStrings{c.Audience}, nil
 }
 
-// mintSciToken signs a short-lived read token the way.
-// `nbf` and `iat` are backdated by 60s because Pelican can see a token before our clock agrees it is valid.
+// mintSciToken signs a short-lived read token. nbf and iat are 60 seconds
+// behind now so a small clock skew does not reject a fresh token.
 func mintSciToken(key *ecdsa.PrivateKey, scope string, now time.Time, lifetime time.Duration) (string, error) {
 	if lifetime <= 0 {
 		return "", fmt.Errorf("token lifetime must be positive")
@@ -89,7 +91,8 @@ func loadPelicanKey(path string) (*ecdsa.PrivateKey, error) {
 	return jwt.ParseECPrivateKeyFromPEM(pem)
 }
 
-// readScope is the SciTokens scope that covers the demo prefix and nothing beside it. The warehouse URL is https://host/sage/<prefix>/warehouse; staged Parquet lives under <prefix> as well, and the token has to cover both.
+// readScope derives read:/<prefix> from .../sage/<prefix>/warehouse.
+// The token covers that prefix and nothing beside it.
 func readScope(warehouse string) (string, error) {
 	u, err := url.Parse(warehouse)
 	if err != nil {

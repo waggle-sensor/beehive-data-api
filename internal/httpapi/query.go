@@ -1,4 +1,6 @@
-// query.go contains the Service type and its associated functions for the public HTTP API.
+// query.go is POST /api/v1/query. Arrow is selected by Accept before the
+// backend runs, and a failure after the status line aborts the response.
+
 package httpapi
 
 import (
@@ -28,19 +30,19 @@ var (
 	})
 )
 
-// ServiceConfig is the configuration for the Service.
+// ServiceConfig selects the query backend and the Arrow buffer codec.
 type ServiceConfig struct {
 	Backend          model.Backend
 	ArrowCompression arrowio.Compression
 }
 
-// Service is the service for the SDR API.
+// Service answers query requests with the configured backend and Arrow compression.
 type Service struct {
 	backend          model.Backend
 	arrowCompression arrowio.Compression
 }
 
-// NewService creates a new Service.
+// NewService uses zstd when the config leaves compression unset.
 func NewService(config *ServiceConfig) *Service {
 	compression := config.ArrowCompression
 	if compression == "" {
@@ -142,6 +144,8 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := results.Err(); err != nil {
 		log.Printf("%s error: %s", remoteAddr, err)
+		// A timed-out managed read must not look like a complete extract.
+		panic(http.ErrAbortHandler)
 	}
 
 	queryDuration := time.Since(queryStart)
@@ -170,7 +174,7 @@ func parseQuery(data []byte) (*model.Query, error) {
 	return query, nil
 }
 
-// writeRecord writes a record to the writer.
+// writeRecord appends one JSON record and a newline.
 func writeRecord(w io.Writer, rec *model.Record) error {
 	return json.NewEncoder(w).Encode(rec)
 }
@@ -180,7 +184,7 @@ func writeContentDispositionHeader(w http.ResponseWriter, ext string) {
 	w.Header().Add("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, contentDispositionName(ext)))
 }
 
-// getRemoteAddr gets the remote address from the request.
+// getRemoteAddr prefers X-Forwarded-For when a proxy set it.
 func getRemoteAddr(r *http.Request) string {
 	if addr := r.Header.Get("X-Forwarded-For"); addr != "" {
 		return addr

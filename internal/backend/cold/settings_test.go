@@ -1,4 +1,5 @@
-// settings_test.go contains the tests for the cold settings type.
+// settings_test.go checks the accepted async-thread and read-ahead values.
+
 package cold
 
 import (

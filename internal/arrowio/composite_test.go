@@ -1,4 +1,5 @@
-// composite_test.go contains the tests for the composite results.
+// composite_test.go checks error propagation and which child owns the rows.
+
 package arrowio
 
 import (

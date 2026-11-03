@@ -1,4 +1,6 @@
-// arrow_stream.go contains the code for the streaming arrow reader for the cold backend.
+// arrow_stream.go streams DuckDB Arrow batches for one cold query and releases
+// the connection when the reader is closed or the context ends.
+
 package cold
 
 import (

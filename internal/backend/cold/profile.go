@@ -1,4 +1,6 @@
-// profile.go contains the cold query profile type and its associated functions.
+// profile.go records a cold query plan when profiling is enabled. An empty
+// parent directory leaves profiling off.
+
 package cold
 
 import (

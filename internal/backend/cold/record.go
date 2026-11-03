@@ -1,4 +1,6 @@
-// record.go contains the cold record functions.
+// record.go turns one scanned row into the public record. VARIANT values stay
+// JSON so large integers are not narrowed to float64.
+
 package cold
 
 import (

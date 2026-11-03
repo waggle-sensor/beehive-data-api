@@ -1,4 +1,6 @@
-// arrow_compression_query_test.go contains the tests for the arrow compression service.
+// arrow_compression_query_test.go checks that the query API selects Arrow
+// compression from the request and leaves NDJSON uncompressed.
+
 package httpapi
 
 import (

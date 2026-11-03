@@ -1,4 +1,6 @@
-// execution_probe_test.go contains tests that probe the cold execution.
+// execution_probe_test.go records how DuckDB executes a cold query. It is a
+// diagnostic, not a latency gate.
+
 package cold
 
 import (

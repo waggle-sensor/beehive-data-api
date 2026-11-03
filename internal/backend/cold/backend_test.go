@@ -1,4 +1,6 @@
-// backend_test.go contains the tests for the cold backend type.
+// backend_test.go checks the row scanner, including VARIANT values that must
+// stay JSON.
+
 package cold
 
 import (

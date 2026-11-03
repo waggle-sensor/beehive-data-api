@@ -1,4 +1,6 @@
-// sql.go contains the cold SQL functions.
+// sql.go builds the cold SELECT. Filters, time bounds, and the metadata shape
+// are fixed here so the scanner can assume one row layout.
+
 package cold
 
 import (

@@ -1,4 +1,5 @@
-// arrow_test.go contains the tests for the cold arrow type.
+// arrow_test.go checks the Arrow projection schema the cold query declares.
+
 package cold
 
 import (

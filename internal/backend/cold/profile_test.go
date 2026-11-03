@@ -1,4 +1,6 @@
-// profile_test.go contains the tests for the cold query profile type.
+// profile_test.go checks that an empty directory disables profiling and that
+// an enabled session records a plan.
+
 package cold
 
 import (

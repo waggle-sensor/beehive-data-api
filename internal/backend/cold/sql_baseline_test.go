@@ -1,3 +1,6 @@
+// sql_baseline_test.go keeps the merged-map SQL used by older comparisons.
+// Live queries use the promoted metadata shape instead.
+
 package cold
 
 import (

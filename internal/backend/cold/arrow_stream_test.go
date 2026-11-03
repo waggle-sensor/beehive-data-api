@@ -1,4 +1,6 @@
-// arrow_stream_test.go contains the tests for the streaming arrow reader type.
+// arrow_stream_test.go checks streaming cancellation, connection reuse, and the
+// DuckDB settings a cold Arrow query actually applies.
+
 package cold
 
 import (

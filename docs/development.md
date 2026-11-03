@@ -48,7 +48,19 @@ explicitly requiring a REST fixture or probe inputs skip unless configured.
 Preserve the ownership contract: the handler closes the enclosing result;
 composite encoding borrows ordered parts, and `arrowio.WriteReader` borrows a
 record reader without releasing it. Check failure and cancellation paths when
-changing anything that holds the cold backend lock.
+changing anything that holds the cold backend lock. For dynamic routing, cover
+renewal during query setup and streaming, fixed snapshot/border across renewals,
+expiry after renewal failure, close/release ordering, and rejection of expired
+or changed views. The tiered suite includes static and dynamic routing,
+configuration validation and lease watchdog tests. It can run without native
+DuckDB or live coordinator services:
+
+```sh
+go test -race ./internal/backend/tiered
+go vet ./internal/backend/tiered
+```
+
+These focused checks do not replace the full tagged suite or native HTTP tests.
 
 ## Native Iceberg v3 fixture
 
@@ -85,7 +97,10 @@ can still run its non-REST coverage without that sibling directory.
 
 ## Experiment probes
 
-Root `main` has no tests. Compile each probe from its owning package:
+Root `main` has no tests. Frontier configuration tests live beside the router
+in `internal/backend/tiered/backend_test.go`. Coordination and lease tests are
+in that same package; HTTP format integration is in
+`internal/httpapi/tiered_dynamic_test.go`. Compile each probe from its owning package:
 
 ```sh
 CGO_ENABLED=1 go test -tags=duckdb_arrow -c \
