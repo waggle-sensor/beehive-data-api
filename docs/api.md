@@ -37,7 +37,7 @@ Send a JSON object. `start` is required; unknown fields are rejected.
 | `experimental_func` | string | Hot-side aggregation; see support matrix |
 | `experimental_window` | string | Hot-side aggregation interval, requiring a function |
 
-RFC3339 fractional seconds can retain nine digits, for example `2025-03-01T00:00:00.026403194Z`. Cold queries preserve that nanosecond bound. With tiered routing enabled, direct HTTP requests must use absolute bounds, even for ranges that ultimately route to hot storage. Omitted `end` reaches the hot tier; a cold execution with an omitted end resolves its bound to the request's current time. The Python client resolves relative times before sending a request.
+RFC3339 fractional seconds can retain nine digits, for example `2025-03-01T00:00:00.026403194Z`. Cold queries preserve that nanosecond bound. Relative bounds such as `-1h` use the same Flux duration units the hot service forwards (`ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `mo`, `y`, with an optional leading sign). The tiered router resolves both bounds once, in UTC, against the API clock, then routes that absolute window. An omitted `end` still means no upper bound and reaches the hot tier. A cold execution with an omitted end resolves its bound to the request's current time. The Python client may resolve relative inputs before sending; the API accepts either form.
 
 Limits are per series, not a global response-row limit. Cold series are partitioned by measurement name and assembled metadata; hot limits follow Flux tables. Do not supply both `head` and `tail`. Cold limits must be >= 0; zero selects no rows. Hot-only validation ultimately also depends on Flux.
 
@@ -52,8 +52,8 @@ A value without `*` or `|` uses exact equality. A value containing either select
 | Capability | Hot only | Cold only | Spans border |
 | --- | --- | --- | --- |
 | Ordinary filtered extract | Yes | Yes | Yes, cold then hot |
-| Absolute bounds | Yes | Yes | Required |
-| Direct relative bounds | Supported by hot-only service | No | No, including hot ranges in tiered mode |
+| Absolute bounds | Yes | Yes | Yes |
+| Direct relative bounds | Yes, resolved by Flux | Yes, resolved before the query | Yes, resolved before the split |
 | `head` or `tail` | Yes, per Flux table | Yes, per series | Rejected |
 | Aggregation | Yes | Rejected | Rejected |
 | Bucket override in static mode | Yes | Ignored | Applies only to hot part |

@@ -1,6 +1,7 @@
 // backend.go splits one query at a nanosecond border. Cold is read first and
-// hot continues only when the window crosses the border. Aggregations, head,
-// tail, and relative timestamps are refused because they cannot be split.
+// hot continues only when the window crosses the border. Relative bounds are
+// resolved once before that decision. Aggregations, head, and tail are refused
+// when the resolved window spans the border.
 
 package tiered
 
@@ -25,14 +26,28 @@ type Backend struct {
 	Cold        model.Backend
 	Border      time.Time
 	Coordinator *Coordinator
+	now         func() time.Time // the clock used to resolve relative bounds; tests pin it
 }
 
-// Query routes to one tier, or splits across both and merges for the tiered backend.
-func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
-	if backend.Coordinator != nil {
-		return backend.Coordinator.query(ctx, query, backend.queryAt)
+// clock is the instant both relative bounds are measured from.
+func (backend *Backend) clock() time.Time {
+	if backend.now != nil {
+		return backend.now()
 	}
-	return backend.queryAt(ctx, query, backend.Border)
+	return time.Now()
+}
+
+// Query resolves relative bounds, then routes to one tier or splits across both.
+// The caller's query is not modified. Dynamic coverage sees the resolved start.
+func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
+	resolved, err := resolveRelativeBounds(query, backend.clock())
+	if err != nil {
+		return nil, err
+	}
+	if backend.Coordinator != nil {
+		return backend.Coordinator.query(ctx, resolved, backend.queryAt)
+	}
+	return backend.queryAt(ctx, resolved, backend.Border)
 }
 
 // queryAt routes using the request's chosen boundary; it never mutates shared configuration.
@@ -108,18 +123,11 @@ func (backend *Backend) queryAt(ctx context.Context, query *model.Query, border 
 // maxTime stands in for "no upper bound" on a query with no end.
 var maxTime = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 
-// parseQueryTime parses the subset of timestamp forms the wire protocol
-// accepts. An empty string yields the supplied default.
-//
-// Relative forms ("-1h") are not resolved here: a tiered query using one
-// cannot be routed without knowing "now", and quietly guessing would route
-// to the wrong tier. They are rejected instead, with a message that says so.
+// parseQueryTime parses an absolute bound. An empty string yields the supplied default.
+// Relative bounds are rewritten to absolute timestamps before this is called.
 func parseQueryTime(s string, fallback time.Time) (time.Time, error) {
 	if s == "" {
 		return fallback, nil
-	}
-	if s[0] == '-' || s[0] == '+' {
-		return time.Time{}, fmt.Errorf("relative timestamps are not supported by the tiered backend; use an absolute RFC3339 timestamp")
 	}
 	return time.Parse(time.RFC3339, s)
 }

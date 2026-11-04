@@ -276,22 +276,105 @@ func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
 	}
 }
 
-// TestTieredRejectsRelativeTimestamps tests the tiered rejects relative timestamps.
-// A relative timestamp cannot be routed without knowing "now". Guessing
-// would route to the wrong tier, so it is refused explicitly.
-func TestTieredRejectsRelativeTimestamps(t *testing.T) {
-	hot := &recordingBackend{}
-	cold := &recordingBackend{}
-	backend := newTiered(t, hot, cold, "2025-05-15T00:00:00Z")
+// TestTieredResolvesRelativeTimestamps tests that one API clock fixes both bounds
+// before routing, and that the caller's query text stays unchanged.
+func TestTieredResolvesRelativeTimestamps(t *testing.T) {
+	const border = "2025-05-15T00:00:00Z"
+	now := mustTime(t, "2025-05-20T00:00:00Z")
 
-	_, err := backend.Query(context.Background(), &model.Query{Start: "-1h"})
-	if err == nil {
-		t.Fatal("expected an error for a relative timestamp")
-	}
-	if !strings.Contains(err.Error(), "relative") {
-		t.Errorf("error %q does not explain the problem", err)
-	}
+	t.Run("recent hot range", func(t *testing.T) {
+		hot := &recordingBackend{}
+		cold := &recordingBackend{}
+		backend := newTiered(t, hot, cold, border)
+		backend.now = func() time.Time { return now }
+		original := &model.Query{Start: "-1h", Func: strptr("mean")}
+
+		results, err := backend.Query(context.Background(), original)
+		if err != nil {
+			t.Fatalf("hot relative query: %s", err)
+		}
+		results.Close()
+		if original.Start != "-1h" {
+			t.Fatalf("caller query was rewritten to %q", original.Start)
+		}
+		if hot.calls != 1 || cold.calls != 0 {
+			t.Fatalf("calls hot=%d cold=%d", hot.calls, cold.calls)
+		}
+		if hot.got.Start != "2025-05-19T23:00:00Z" || hot.got.End != "" {
+			t.Fatalf("hot bounds = %q %q", hot.got.Start, hot.got.End)
+		}
+	})
+
+	t.Run("cold range", func(t *testing.T) {
+		hot := &recordingBackend{}
+		cold := &recordingBackend{}
+		backend := newTiered(t, hot, cold, border)
+		backend.now = func() time.Time { return now }
+
+		results, err := backend.Query(context.Background(), &model.Query{Start: "-10d", End: "-6d"})
+		if err != nil {
+			t.Fatalf("cold relative query: %s", err)
+		}
+		results.Close()
+		if cold.calls != 1 || hot.calls != 0 {
+			t.Fatalf("calls hot=%d cold=%d", hot.calls, cold.calls)
+		}
+		if cold.got.Start != "2025-05-10T00:00:00Z" || cold.got.End != "2025-05-14T00:00:00Z" {
+			t.Fatalf("cold bounds = %q %q", cold.got.Start, cold.got.End)
+		}
+	})
+
+	t.Run("open range splits at the border", func(t *testing.T) {
+		hot := &recordingBackend{}
+		cold := &recordingBackend{}
+		backend := newTiered(t, hot, cold, border)
+		backend.now = func() time.Time { return now }
+
+		results, err := backend.Query(context.Background(), &model.Query{Start: "-10d"})
+		if err != nil {
+			t.Fatalf("spanning relative query: %s", err)
+		}
+		results.Close()
+		if cold.got.Start != "2025-05-10T00:00:00Z" || cold.got.End != border {
+			t.Fatalf("cold bounds = %q %q", cold.got.Start, cold.got.End)
+		}
+		if hot.got.Start != border || hot.got.End != "" {
+			t.Fatalf("hot bounds = %q %q", hot.got.Start, hot.got.End)
+		}
+	})
+
+	t.Run("spanning aggregation is still refused", func(t *testing.T) {
+		hot := &recordingBackend{}
+		cold := &recordingBackend{}
+		backend := newTiered(t, hot, cold, border)
+		backend.now = func() time.Time { return now }
+
+		_, err := backend.Query(context.Background(), &model.Query{Start: "-30d", Func: strptr("mean")})
+		if err == nil || !strings.Contains(err.Error(), "aggregation") {
+			t.Fatalf("error = %v", err)
+		}
+		if hot.calls != 0 || cold.calls != 0 {
+			t.Fatal("refused query reached a tier")
+		}
+	})
+
+	t.Run("invalid duration", func(t *testing.T) {
+		hot := &recordingBackend{}
+		cold := &recordingBackend{}
+		backend := newTiered(t, hot, cold, border)
+		backend.now = func() time.Time { return now }
+
+		_, err := backend.Query(context.Background(), &model.Query{Start: "-nope"})
+		if err == nil || !strings.Contains(err.Error(), "invalid start timestamp") {
+			t.Fatalf("error = %v", err)
+		}
+		if hot.calls != 0 || cold.calls != 0 {
+			t.Fatal("invalid duration reached a tier")
+		}
+	})
 }
+
+func strptr(s string) *string { return &s }
 
 // TestTieredSurfacesFirstTierError tests the tiered surfaces first tier error.
 // A failing cold tier must not look like an empty-but-complete result. The

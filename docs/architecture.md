@@ -54,7 +54,7 @@ flowchart TD
     Mode -->|yes| Frontier{"COLD_FRONTIER"}
     Frontier -->|static| Static["Use configured COLD_BORDER"]
     Frontier -->|dynamic| Grant["Acquire pinned frontier/snapshot and start lease renewal"]
-    Static --> Bounds["Parse absolute start and end"]
+    Static --> Bounds["Resolve relative bounds against the API clock"]
     Grant --> Bounds
     Bounds --> Compare{"Range against the border"}
     Compare -->|"ends at or before"| Cold["Cold backend"]
@@ -90,7 +90,7 @@ flowchart TD
 
 The query handler validates the JSON request and records Arrow intent in the request context when `Accept` selects Arrow. It calls the configured backend before choosing the response writer. Hot-only operation uses Influx directly; setting a cold warehouse wraps both stores in the tiered router.
 
-The router sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Crossing head/tail and aggregation requests are rejected rather than combined with incorrect per-series semantics. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, warehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
+The router resolves a relative start or end once, in UTC, against its own clock, using Flux duration units. It then sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Crossing head/tail and aggregation requests are rejected rather than combined with incorrect per-series semantics. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, warehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
 
 The hot backend generates Flux, reads records through the Influx SDK, and extracts measurement values and tags. The HTTP encoder converts those records to NDJSON or batches of up to 65,536 rows for Arrow. Hot iteration order comes from Flux, including its table grouping.
 

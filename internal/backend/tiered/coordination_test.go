@@ -1,5 +1,6 @@
-// coordination_test.go checks that a managed read keeps its snapshot until
-// close, and that a coordinator failure does not fall back to an unpinned query.
+// coordination_test.go checks managed reads against a fake coordinator.
+// A grant stays until the result closes, a failed acquire does not fall
+// back to the static border, and routing uses the pinned frontier.
 
 package tiered
 
@@ -15,10 +16,12 @@ import (
 	"time"
 )
 
+// transport is an HTTP round tripper backed by one function.
 type transport func(*http.Request) (*http.Response, error)
 
 func (f transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// result is a finished result stream. Close records that the caller released it.
 type result struct {
 	closed bool
 	err    error
@@ -29,21 +32,29 @@ func (r *result) Record() *model.Record { return nil }
 func (r *result) Err() error            { return nil }
 func (r *result) Close() error          { r.closed = true; return r.err }
 
+// inner records the query it received and the cold metadata on that context.
 type inner struct {
 	metadata string
 	res      *result
 	fail     bool
 	ctx      context.Context
+	got      *model.Query
 }
 
-func (b *inner) Query(ctx context.Context, _ *model.Query) (model.Results, error) {
+func (b *inner) Query(ctx context.Context, query *model.Query) (model.Results, error) {
 	b.ctx = ctx
+	copied := *query
+	b.got = &copied
 	b.metadata = model.ColdMetadata(ctx)
 	if b.fail {
 		return nil, errors.New("query failed")
 	}
 	return b.res, nil
 }
+// fixture serves one successful acquire, a failing renew, and one release.
+// The acquired frontier is 2025-03-02 and coverage starts on 2025-03-01.
+// Renewal cannot extend that deadline. Release is refused until the inner
+// result closes, unless the query was never going to return that result.
 func fixture(t *testing.T) (*Backend, *inner, *int) {
 	t.Helper()
 	released := new(int)
@@ -73,6 +84,9 @@ func fixture(t *testing.T) (*Backend, *inner, *int) {
 	})}
 	return b, in, released
 }
+// TestReadViewPinsMetadataUntilResultCloses keeps the grant through the
+// query and releases it once. A second close does not release again. The
+// wrapper still exposes the single child stream used by native Arrow.
 func TestReadViewPinsMetadataUntilResultCloses(t *testing.T) {
 	b, in, released := fixture(t)
 	r, e := b.Query(context.Background(), &model.Query{Start: "2025-03-01T00:00:00Z", End: "2025-03-01T01:00:00Z"})
@@ -94,6 +108,8 @@ func TestReadViewPinsMetadataUntilResultCloses(t *testing.T) {
 		t.Fatal(*released)
 	}
 }
+// TestQueryFailureReleasesAndCloseFailureHolds releases the grant when the
+// query itself fails, and holds it when closing the result fails.
 func TestQueryFailureReleasesAndCloseFailureHolds(t *testing.T) {
 	b, in, released := fixture(t)
 	in.fail = true
@@ -110,6 +126,8 @@ func TestQueryFailureReleasesAndCloseFailureHolds(t *testing.T) {
 		t.Fatal(e, *released)
 	}
 }
+// TestCoordinatorFailureNeverFallsBack rejects the query when acquire
+// cannot reach the coordinator.
 func TestCoordinatorFailureNeverFallsBack(t *testing.T) {
 	b, _, _ := fixture(t)
 	b.Coordinator.Client = &http.Client{Transport: transport(func(*http.Request) (*http.Response, error) { return nil, errors.New("offline") })}
@@ -118,6 +136,9 @@ func TestCoordinatorFailureNeverFallsBack(t *testing.T) {
 	}
 }
 
+// TestDynamicFrontierUsesTieredRouting splits on the grant's frontier.
+// The backend's static border is ignored. Cold is strictly before the
+// frontier and hot starts at it.
 func TestDynamicFrontierUsesTieredRouting(t *testing.T) {
 	for _, tc := range []struct {
 		name, start, end string
@@ -150,6 +171,8 @@ func TestDynamicFrontierUsesTieredRouting(t *testing.T) {
 	}
 }
 
+// TestReadDeadlineCancelsQuery cancels the query context when the grant
+// expires and leaves the grant held until Close.
 func TestReadDeadlineCancelsQuery(t *testing.T) {
 	b, in, released := fixture(t)
 	original := b.Coordinator.Client.Transport
@@ -187,6 +210,9 @@ func TestReadDeadlineCancelsQuery(t *testing.T) {
 	}
 }
 
+// TestInvalidReadDeadlineNeverStartsQuery rejects an empty, unparseable,
+// or already expired deadline before either tier is queried, then releases
+// the grant because no result was opened.
 func TestInvalidReadDeadlineNeverStartsQuery(t *testing.T) {
 	for _, deadline := range []string{"", "invalid", time.Now().Add(-time.Hour).Format(time.RFC3339Nano)} {
 		t.Run(deadline, func(t *testing.T) {
@@ -213,5 +239,33 @@ func TestInvalidReadDeadlineNeverStartsQuery(t *testing.T) {
 				t.Fatal("query started or grant leaked", *released)
 			}
 		})
+	}
+}
+
+// TestDynamicRelativeStartResolvesBeforeCoverage turns a relative start
+// into an absolute instant before the coverage check. A start before
+// coverage is rejected and does not reach a tier.
+func TestDynamicRelativeStartResolvesBeforeCoverage(t *testing.T) {
+	b, in, released := fixture(t)
+	b.now = func() time.Time { return time.Date(2025, 3, 3, 0, 0, 0, 0, time.UTC) }
+	results, err := b.Query(context.Background(), &model.Query{Start: "-1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.got == nil || in.got.Start != "2025-03-02T23:00:00Z" {
+		t.Fatalf("routed start = %#v", in.got)
+	}
+	if err = results.Close(); err != nil || *released != 1 {
+		t.Fatal(err, *released)
+	}
+
+	b, in, released = fixture(t)
+	b.now = func() time.Time { return time.Date(2025, 3, 3, 0, 0, 0, 0, time.UTC) }
+	in.fail = true
+	if _, err = b.Query(context.Background(), &model.Query{Start: "-100d"}); err == nil || !strings.Contains(err.Error(), "coverage") {
+		t.Fatal(err)
+	}
+	if in.got != nil || *released != 1 {
+		t.Fatal("coverage rejection routed or leaked", in.got, *released)
 	}
 }
