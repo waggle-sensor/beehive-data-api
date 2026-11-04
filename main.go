@@ -94,13 +94,18 @@ func main() {
 		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border}
 		if frontier.Mode == "dynamic" {
 			tieredBackend.Coordinator = &tiered.Coordinator{URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
-				Bucket: *influxdbBucket, Warehouse: *coldWarehouse}
+				Bucket: *influxdbBucket, Warehouse: *coldWarehouse, ObserveRenewal: httpapi.ObserveReadRenewal}
 			log.Printf("dynamic tiered routing enabled; frontier and snapshot pinned per request")
 		}
 		backend = tieredBackend
 	}
 
 	// create query service
+	metricFrontier := frontier.Mode
+	if *coldWarehouse == "" {
+		metricFrontier = "hot"
+	}
+	httpapi.ConfigureMetrics(metricFrontier, string(compression))
 	querySvc := httpapi.NewService(&httpapi.ServiceConfig{Backend: backend, ArrowCompression: compression})
 
 	// create stream service

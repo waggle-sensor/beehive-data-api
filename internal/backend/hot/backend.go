@@ -50,7 +50,10 @@ type influxResults struct {
 
 // Err returns the error for the influx results.
 func (r *influxResults) Err() error {
-	return r.err
+	if r.err != nil {
+		return r.err
+	}
+	return r.results.Err()
 }
 
 // Close closes the influx results.

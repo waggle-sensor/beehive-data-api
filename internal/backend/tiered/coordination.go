@@ -36,6 +36,8 @@ type View struct {
 
 // Coordinator configures dynamic frontier discovery for the tiered backend.
 type Coordinator struct {
+	// ObserveRenewal is optional and does not participate in lease decisions.
+	ObserveRenewal                       func(outcome string, seconds float64)
 	URL, Token, Bucket, Owner, Warehouse string
 	Client                               *http.Client
 	ownerOnce                            sync.Once

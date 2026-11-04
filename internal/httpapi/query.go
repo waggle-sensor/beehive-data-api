@@ -13,21 +13,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-
 	"beehive-data-api/internal/arrowio"
 	model "beehive-data-api/internal/query"
-)
-
-const metricNamespace = "dataapi"
-
-var (
-	responseLatencySeconds = promauto.NewHistogram(prometheus.HistogramOpts{
-		Namespace: metricNamespace,
-		Name:      "response_latency_seconds",
-		Help:      "A histogram of backend latency duration.",
-	})
 )
 
 // ServiceConfig selects the query backend and the Arrow buffer codec.
@@ -40,6 +27,7 @@ type ServiceConfig struct {
 type Service struct {
 	backend          model.Backend
 	arrowCompression arrowio.Compression
+	metrics          *apiMetrics
 }
 
 // NewService uses zstd when the config leaves compression unset.
@@ -48,32 +36,66 @@ func NewService(config *ServiceConfig) *Service {
 	if compression == "" {
 		compression = arrowio.CompressionZstd
 	}
-	return &Service{backend: config.Backend, arrowCompression: compression}
+	return &Service{backend: config.Backend, arrowCompression: compression, metrics: defaultAPIMetrics}
 }
 
-// ServeHTTP parses a query request, translates and forwards it to the backend
-// and writes the results back to the client.
+// ServeHTTP runs one query and records its outcome. A failure after the status
+// line aborts the response instead of ending as a successful short body.
 func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestStartTime := time.Now()
+	arrowResult := arrowio.AcceptsStream(r.Header.Get("Accept"))
+	format := "ndjson"
+	if arrowResult {
+		format = "arrow"
+	}
+	metrics := svc.metrics
+	if metrics == nil {
+		metrics = defaultAPIMetrics
+	}
+	observation := metrics.beginQuery(r.Context(), format, requestStartTime)
+	underlyingWriter := w
+	w = &queryResponseWriter{ResponseWriter: w, observation: observation}
+	queryCount := 0
+	defer func() {
+		recovered := recover()
+		observation.rows = queryCount
+		if recovered != nil {
+			if recovered != http.ErrAbortHandler {
+				metrics.queryErrors.WithLabelValues(format, "panic").Inc()
+				if observation.outcome == "success" {
+					observation.outcome = "panic"
+				}
+			} else if observation.outcome == "success" {
+				observation.fail("iterate", "stream_error", http.ErrAbortHandler)
+			}
+		}
+		observation.finish()
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
 
 	remoteAddr := getRemoteAddr(r)
 	log.Printf("received request from %s", remoteAddr)
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(underlyingWriter, r.Body, 4096)
 	defer r.Body.Close()
 
 	queryBody, err := io.ReadAll(r.Body)
 	if err == io.EOF || len(queryBody) == 0 {
+		observation.fail("request", "invalid_request", err)
 		log.Printf("%s error: no query provided", remoteAddr)
 		http.Error(w, "error: no query provided", http.StatusBadRequest)
 		return
 	}
 	if _, ok := err.(*http.MaxBytesError); ok {
+		observation.fail("request", "invalid_request", err)
 		log.Printf("%s error: rejected large request", remoteAddr)
 		http.Error(w, "error: query is too large - must be <1KB", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
+		observation.fail("request", "invalid_request", err)
 		log.Printf("%s error: failed to read query body: %s", remoteAddr, err.Error())
 		http.Error(w, "error: failed to read query body", http.StatusBadRequest)
 		return
@@ -81,6 +103,7 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	query, err := parseQuery(queryBody)
 	if err != nil {
+		observation.fail("parse", "invalid_request", err)
 		log.Printf("%s error: failed to parse query: %s", remoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to parse query: %s", err.Error()), http.StatusBadRequest)
 		return
@@ -88,22 +111,31 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("%s query: %q", remoteAddr, queryBody)
 
-	queryCount := 0
 	queryStart := time.Now()
 
 	ctx := r.Context()
-	arrowResult := arrowio.AcceptsStream(r.Header.Get("Accept"))
 	compression := svc.arrowCompression
 	if arrowResult {
 		ctx = arrowio.WithResult(ctx)
 	}
+	backendStart := time.Now()
 	results, err := svc.backend.Query(ctx, query)
+	metrics.backendDuration.WithLabelValues(format, observationOutcome(ctx, err)).Observe(time.Since(backendStart).Seconds())
 	if err != nil {
+		observation.fail("backend", "backend_error", err)
 		log.Printf("%s error: failed to query backend: %s", remoteAddr, err.Error())
 		http.Error(w, fmt.Sprintf("error: failed to query backend: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
-	defer results.Close()
+	defer func() {
+		began := time.Now()
+		err := results.Close()
+		metrics.closeDuration.WithLabelValues(format, observationOutcome(ctx, err)).Observe(time.Since(began).Seconds())
+		if err != nil {
+			observation.fail("close", "close_error", err)
+			log.Printf("%s error: failed to close results: %v", remoteAddr, err)
+		}
+	}()
 
 	w.Header().Add("Access-Control-Allow-Origin", "*")
 	if arrowResult {
@@ -117,10 +149,17 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if arrowResult {
 		// observe latency to start of response body. this is what the user actually sees so its what we care about.
-		responseLatencySeconds.Observe(time.Since(requestStartTime).Seconds())
+		latency := time.Since(requestStartTime).Seconds()
+		metrics.responseLatencySeconds.Observe(latency)
+		metrics.responseLatency.WithLabelValues(format).Observe(latency)
 		n, err := arrowio.WriteIPC(w, results, compression)
 		queryCount = n
 		if err != nil {
+			stage := "encode"
+			if observation.writeError != nil {
+				stage = "write"
+			}
+			observation.fail(stage, "stream_error", err)
 			log.Printf("%s error: %s", remoteAddr, err)
 			// A streaming query can fail after headers or batches were sent.
 			// Abort HTTP framing so the client cannot accept partial rows as a
@@ -132,17 +171,26 @@ func (svc *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for results.Next() {
 			record := results.Record()
 			if !startedWritingResults {
-				responseLatencySeconds.Observe(time.Since(requestStartTime).Seconds())
+				latency := time.Since(requestStartTime).Seconds()
+				metrics.responseLatencySeconds.Observe(latency)
+				metrics.responseLatency.WithLabelValues(format).Observe(latency)
 				startedWritingResults = true
 			}
 			if err := writeRecord(w, record); err != nil {
-				break
+				stage := "encode"
+				if observation.writeError != nil {
+					stage = "write"
+				}
+				observation.fail(stage, "stream_error", err)
+				log.Printf("%s error: failed to write query response: %v", remoteAddr, err)
+				panic(http.ErrAbortHandler)
 			}
 			queryCount++
 		}
 	}
 
 	if err := results.Err(); err != nil {
+		observation.fail("iterate", "stream_error", err)
 		log.Printf("%s error: %s", remoteAddr, err)
 		// A timed-out managed read must not look like a complete extract.
 		panic(http.ErrAbortHandler)

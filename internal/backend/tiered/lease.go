@@ -60,13 +60,21 @@ func (coordinator *Coordinator) readLease(parent context.Context, owner string, 
 			requestCtx, end := context.WithDeadline(ctx, confirmedExpiry)
 			requestCtx, timeout := context.WithTimeout(requestCtx, 30*time.Second)
 			var renewed View
+			began := time.Now()
 			err := coordinator.call(requestCtx, "/v1/reads/renew", map[string]string{"id": view.ID, "owner": owner, "bucket": coordinator.Bucket}, &renewed)
+			observe := func(outcome string) {
+				if coordinator.ObserveRenewal != nil {
+					coordinator.ObserveRenewal(outcome, time.Since(began).Seconds())
+				}
+			}
 			timeout()
 			end()
 			if ctx.Err() != nil {
+				observe("canceled")
 				return
 			}
 			if err != nil {
+				observe("error")
 				if !retry {
 					log.Printf("managed read renewal failed; retrying before lease expiry: %v", err)
 				}
@@ -75,6 +83,7 @@ func (coordinator *Coordinator) readLease(parent context.Context, owner string, 
 			}
 			next, err := time.Parse(time.RFC3339Nano, renewed.ExpiresAt)
 			if err != nil || renewed.ID != view.ID || renewed.Warehouse != view.Warehouse || renewed.Metadata != view.Metadata || renewed.Frontier != view.Frontier || renewed.CoverageStart != view.CoverageStart || renewed.Generation != view.Generation || next.Before(confirmedExpiry) {
+				observe("error")
 				cancel(errors.New("invalid renewed read lease"))
 				return
 			}
@@ -83,11 +92,13 @@ func (coordinator *Coordinator) readLease(parent context.Context, owner string, 
 			if ctx.Err() != nil || !time.Now().Before(expiry) {
 				cancel(context.DeadlineExceeded)
 				mu.Unlock()
+				observe("canceled")
 				return
 			}
 			expiry = next
 			watchdog.Reset(time.Until(expiry))
 			mu.Unlock()
+			observe("success")
 			retry = false
 		}
 	}()

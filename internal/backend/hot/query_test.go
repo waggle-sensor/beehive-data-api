@@ -3,12 +3,15 @@
 package hot
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"testing"
 
 	model "beehive-data-api/internal/query"
+	"github.com/influxdata/influxdb-client-go/v2/api"
 )
 
 // init initializes the test environment.
@@ -197,6 +200,27 @@ func TestBuildFluxBadQuery(t *testing.T) {
 		_, err := buildFluxQuery("mybucket", query)
 		if err == nil {
 			t.Fatalf("expected error for %#v", query)
+		}
+	}
+}
+
+type failingCSVReader struct{ err error }
+
+func (reader failingCSVReader) Read([]byte) (int, error) { return 0, reader.err }
+
+func TestInfluxIterationErrorIsNotSuccessfulEOF(t *testing.T) {
+	for _, failure := range []error{errors.New("lost Influx response"), context.Canceled} {
+		results := &influxResults{results: api.NewQueryTableResult(io.NopCloser(failingCSVReader{failure}))}
+		if results.Next() {
+			t.Fatal("failed stream produced a row")
+		}
+		if !errors.Is(results.Err(), failure) {
+			t.Fatal("SDK iteration failure was hidden", results.Err())
+		}
+		conversion := errors.New("record conversion failure")
+		results.err = conversion
+		if results.Err() != conversion {
+			t.Fatal("conversion error precedence changed")
 		}
 	}
 }
