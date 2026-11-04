@@ -1,12 +1,8 @@
 # Beehive Data API
 
-Beehive Data API serves measurements from InfluxDB hot storage and, when
-configured, an Iceberg v3 cold warehouse on Pelican. Queries return NDJSON or
-an Arrow IPC stream with the same four fields across storage tiers. A separate
-SSE endpoint streams live measurements from RabbitMQ.
+Beehive Data API serves measurements from InfluxDB hot storage and, when configured, an Iceberg v3 cold warehouse on Pelican. Queries return NDJSON or an Arrow IPC stream with the same four fields across storage tiers. A separate SSE endpoint streams live measurements from RabbitMQ.
 
-These docs describe this source tree. Deployed services and released clients
-may have different capabilities.
+These docs describe this source tree. Deployed services and released clients may have different capabilities.
 
 ## Documentation
 
@@ -32,16 +28,15 @@ export INFLUXDB_BUCKET='your-bucket'
 ./beehive-data-api
 ```
 
-The default address is `:10000`. Cold storage is disabled until
-`COLD_WAREHOUSE` is set. See [operations](docs/operations.md) for complete local
-and Docker examples and [configuration](docs/configuration.md) for required
-cold settings.
+The default address is `:10000`. Cold storage is disabled until `COLD_WAREHOUSE` is set. See [operations](docs/operations.md) for complete local and Docker examples and [configuration](docs/configuration.md) for required cold settings.
 
-`CGO_ENABLED=1` and `-tags=duckdb_arrow` are required for supported service
-builds: DuckDB's dependency still gates `arrowmapping` behind that tag.
-Docker and CI use it. The module name is `beehive-data-api`.
+`CGO_ENABLED=1` and `-tags=duckdb_arrow` are required for supported service builds: DuckDB's dependency still gates `arrowmapping` behind that tag. Docker and CI use it. The module name is `beehive-data-api`.
 
 ```sh
 CGO_ENABLED=1 go test -tags=duckdb_arrow ./...
 CGO_ENABLED=1 go vet -tags=duckdb_arrow ./...
 ```
+
+## Research history
+
+Arrow response design and the recorded query measurements remain in [plan 8](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/8_arrow_query_response.md) and [plan 11](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/11_query_performance_summary.md). Those notes keep the historical decisions and experiment results. These docs describe the current source.
