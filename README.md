@@ -39,4 +39,4 @@ CGO_ENABLED=1 go vet -tags=duckdb_arrow ./...
 
 ## Research history
 
-Arrow response design and the recorded query measurements remain in [plan 8](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/8_arrow_query_response.md) and [plan 11](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/11_query_performance_summary.md). Those notes keep the historical decisions and experiment results. These docs describe the current source.
+Arrow response design, recorded query measurements, and aggregation implementation remain in [plan 8](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/8_arrow_query_response.md), [plan 11](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/11_query_performance_summary.md), [plan 13](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/13_aggregation_queries.md), and [plan 14](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/14_head_tail_queries.md). Those notes keep the historical decisions and experiment results. These docs describe the current source.

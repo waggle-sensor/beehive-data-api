@@ -59,9 +59,14 @@ flowchart TD
     Bounds --> Compare{"Range against the border"}
     Compare -->|"ends at or before"| Cold["Cold backend"]
     Compare -->|"starts at or after"| Hot
-    Compare -->|crosses| Shape{"Aggregation or head/tail?"}
-    Shape -->|yes| Reject["Reject the query"]
-    Shape -->|no| Split["Split at the border"]
+    Compare -->|crosses| Shape{"Aggregation?"}
+    Shape -->|yes| Stage["Stage raw hot input in private Parquet"]
+    Stage --> Aggregate["Tiered backend plans one raw union aggregate"]
+    Shape -->|no| Limits{"Head/tail?"}
+    Limits -->|yes| SelectStage["Stage raw hot input in private Parquet"]
+    SelectStage --> Select["Tiered backend plans selection across both tiers"]
+    Select --> Token
+    Limits -->|no| Split["Split at the border"]
     Split --> ColdHalf["Cold backend, older half"]
     Split --> HotHalf["Hot backend, newer half"]
     ColdHalf --> Ordered["Composite result, cold then hot"]
@@ -69,6 +74,7 @@ flowchart TD
 
     Cold --> Token["Load the signing key and mint a scoped token"]
     ColdHalf --> Token
+    Aggregate --> Token
     Token --> SQL["Use pinned metadata or resolve the static hint; build SQL"]
     SQL --> ColdFmt{"Arrow intent?"}
     ColdFmt -->|yes| Native["Native DuckDB stream on the reused engine"]
@@ -90,7 +96,7 @@ flowchart TD
 
 The query handler validates the JSON request and records Arrow intent in the request context when `Accept` selects Arrow. It calls the configured backend before choosing the response writer. Hot-only operation uses Influx directly; setting a cold warehouse wraps both stores in the tiered router.
 
-The router resolves a relative start or end once, in UTC, against its own clock, using Flux duration units. It then sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Crossing head/tail and aggregation requests are rejected rather than combined with incorrect per-series semantics. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, warehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
+The router resolves a relative start or end once, in UTC, against its own clock, using Flux duration units. It then sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Standalone crossing head/tail requests stage raw hot input and select observations once per canonical series over the combined ranges. The tiered backend stages raw hot input and plans one DuckDB aggregate over cold plus hot rows for crossing aggregates; combined limits are applied per series before aggregation. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, warehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
 
 The hot backend generates Flux, reads records through the Influx SDK, and extracts measurement values and tags. The HTTP encoder converts those records to NDJSON or batches of up to 65,536 rows for Arrow. Hot iteration order comes from Flux, including its table grouping.
 
@@ -122,6 +128,8 @@ The current reader targets Iceberg v3 observations with:
 - promoted tag columns `plugin`, `vsn`, `node`, `host`, `task`, `job`, and `zone`.
 
 Promoted tags are merged into public metadata with the existing collision precedence. Stored types are projected into the same HTTP schema as hot storage. NDJSON values retain raw JSON text internally instead of decoding large integers through float64. Arrow exposes JSON strings, not storage MAP or VARIANT arrays.
+
+Marked tables set `sage.value.encoding` to `variant-uint64-decimal-v1`. Aggregates then restore those reserved zero-scale decimal VARIANT values to uint64 after range validation. Unmarked tables keep the stored kind, and an unsupported marker fails the aggregate. Ordinary extracts still serialize the stored value directly.
 
 For the deployed URL layout, the warehouse base is `https://<host>/sage/<isolated-prefix>/warehouse`. The API reads `<base>/sage/obs/metadata/version-hint.text` in static mode, validates the metadata stem and opens `<base>/sage/obs/metadata/<stem>.metadata.json`. Dynamic mode validates and opens the coordinator's pinned metadata URL instead. Referenced metadata, manifests and data objects must remain accessible. The API is a reader; it does not publish snapshots or write warehouse files.
 

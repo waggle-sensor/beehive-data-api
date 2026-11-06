@@ -130,6 +130,7 @@ Dynamic query logs also identify the reader owner, unresolved acquires and renew
 | No first batch on a long query | Complete query profile; scan/sort can block before streaming begins |
 | Container exits 137 or is OOM-killed | Container limit/other processes and cgroup counters; DuckDB's 3 GB is not a total-process limit |
 | NDJSON finishes with too few rows | Check server errors and independent expected counts; HTTP 200 is insufficient |
-| Head/tail or aggregation crosses border | Narrow to one tier or use an ordinary extract |
-| Direct relative query fails | Use a Flux duration such as `-1h`, `-2d12h`, `-1w`, or `-1mo`; the API resolves it once in UTC, and a window that still crosses the border cannot aggregate or use head/tail |
+| Standalone head/tail crosses border | Supported; check staging space/budget, source bucket, valid limits and the single value-field contract |
+| Cold/spanning aggregation fails | Check supported function/window, source bucket, value-encoding marker, detected mixed kinds, staging space/byte budget and result expansion budget |
+| Direct relative query fails | Use a Flux duration such as `-1h`, `-2d12h`, `-1w`, or `-1mo`; the API resolves it once in UTC, with ordinary crossing extracts, standalone head/tail and supported aggregates allowed |
 | Stream returns 502 | RabbitMQ URL, exchange `waggle.msg`, and broker connectivity |

@@ -4,6 +4,8 @@
 package cold
 
 import (
+	"beehive-data-api/internal/arrowio"
+	model "beehive-data-api/internal/query"
 	"context"
 	"encoding/json"
 	"log"
@@ -78,6 +80,15 @@ func coldProfileClock(p *coldQueryProfile) time.Time {
 	return time.Now()
 }
 
+// value records a diagnostic count or size, separately from elapsed phases.
+func (p *coldQueryProfile) value(name string, value float64) {
+	if p != nil {
+		p.mu.Lock()
+		p.phases[name] = value
+		p.mu.Unlock()
+	}
+}
+
 // duration adds the duration of a phase to the cold query profile.
 func (p *coldQueryProfile) duration(phase string, start time.Time) {
 	if p == nil {
@@ -144,12 +155,14 @@ func (p *coldQueryProfile) finish(failed bool) {
 		defer p.mu.Unlock()
 		status := "incomplete"
 		switch {
-		case p.ctx.Err() != nil:
-			status = "cancelled"
 		case failed:
 			status = "failed"
 		case p.eof:
+			// A finished stream stays complete when the request context ends
+			// after EOF, which is how a successful Arrow response closes.
 			status = "complete"
+		case p.ctx.Err() != nil:
+			status = "cancelled"
 		}
 		p.phases["total_backend_lifetime_seconds"] = time.Since(p.start).Seconds()
 		stat, err := os.Stat(p.file)
@@ -182,3 +195,36 @@ func (p *coldQueryProfile) finish(failed bool) {
 		log.Printf("cold profile saved status=%s rows=%d timing=%s", status, p.rows, path)
 	})
 }
+
+// BeginQueryProfile starts the native lifetime before tiered input staging.
+func (backend *Backend) BeginQueryProfile(ctx context.Context) (context.Context, model.QueryProfile) {
+	profile := coldProfileFromContext(ctx)
+	if profile == nil && arrowio.WantsResult(ctx) && backend.ProfileDir != "" {
+		var err error
+		profile, err = newColdQueryProfile(ctx, backend.ProfileDir)
+		if err != nil {
+			log.Printf("query profile creation: %v", err)
+		} else {
+			ctx = context.WithValue(ctx, coldQueryProfileKey{}, profile)
+		}
+	}
+	if profile == nil {
+		return ctx, model.NoQueryProfile{}
+	}
+	observer := queryProfile{profile}
+	return model.WithQueryProfile(ctx, observer), observer
+}
+
+// queryProfile adapts the cold profile to the interface shared with hot staging.
+type queryProfile struct{ cold *coldQueryProfile }
+
+func (adapter queryProfile) Enabled() bool { return adapter.cold != nil }
+func (adapter queryProfile) Clock() time.Time {
+	return coldProfileClock(adapter.cold)
+}
+func (adapter queryProfile) Duration(name string, start time.Time) {
+	adapter.cold.duration(name, start)
+}
+func (adapter queryProfile) Value(name string, value float64) { adapter.cold.value(name, value) }
+func (adapter queryProfile) Mark(name string)                 { adapter.cold.mark(name) }
+func (adapter queryProfile) Finish(failed bool)               { adapter.cold.finish(failed) }

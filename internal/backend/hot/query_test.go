@@ -8,11 +8,27 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"strings"
 	"testing"
 
 	model "beehive-data-api/internal/query"
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
+	influxquery "github.com/influxdata/influxdb-client-go/v2/api/query"
 )
+
+func TestAggregateRawInputRejectsUnexpectedField(t *testing.T) {
+	record := influxquery.NewFluxRecord(0, map[string]interface{}{"_measurement": "t", "_field": "other", "_value": int64(1)})
+	strict := &influxResults{validateValueField: true}
+	if _, err := strict.convertToAPIRecord(record); err == nil {
+		t.Fatal("unexpected field silently merged into aggregate")
+	}
+	ordinary := &influxResults{}
+	if _, err := ordinary.convertToAPIRecord(record); err != nil {
+		t.Fatal("ordinary hot field behavior changed", err)
+	}
+}
 
 // init initializes the test environment.
 func init() {
@@ -222,5 +238,53 @@ func TestInfluxIterationErrorIsNotSuccessfulEOF(t *testing.T) {
 		if results.Err() != conversion {
 			t.Fatal("conversion error precedence changed")
 		}
+	}
+}
+
+type rawSDKTransport func(*http.Request) (*http.Response, error)
+
+func (f rawSDKTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRawAggregationSDKRetainsNativeTypes(t *testing.T) {
+	csv := `#datatype,string,long,dateTime:RFC3339,unsignedLong,string,string,string
+,result,table,_time,_value,_field,_measurement,vsn
+,_result,0,2025-03-01T00:00:00.000000194Z,18446744073709551615,value,t,A
+#datatype,string,long,dateTime:RFC3339,double,string,string,string
+,result,table,_time,_value,_field,_measurement,vsn
+,_result,1,2025-03-01T00:00:00.000000195Z,6.0,value,t,A
+#datatype,string,long,dateTime:RFC3339,long,string,string,string
+,result,table,_time,_value,_field,_measurement,vsn
+,_result,2,2025-03-01T00:00:00.000000196Z,6,value,t,A
+#datatype,string,long,dateTime:RFC3339,boolean,string,string,string
+,result,table,_time,_value,_field,_measurement,vsn
+,_result,3,2025-03-01T00:00:00.000000197Z,false,value,t,A
+#datatype,string,long,dateTime:RFC3339,string,string,string,string
+,result,table,_time,_value,_field,_measurement,vsn
+,_result,4,2025-03-01T00:00:00.000000198Z,6,value,t,A
+`
+	client := influxdb2.NewClientWithOptions("https://fixture", "fixture", influxdb2.DefaultOptions().SetHTTPClient(&http.Client{Transport: rawSDKTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(csv))}, nil
+	})}))
+	defer client.Close()
+	backend := Backend{Client: client, Org: "fixture", Bucket: "fixture"}
+	result, err := backend.QueryRawSource(context.Background(), &model.Query{Start: "2025-03-01T00:00:00Z", End: "2025-03-01T00:01:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	expected := []any{uint64(18446744073709551615), float64(6), int64(6), false, "6"}
+	index := 0
+	for result.Next() {
+		if index >= len(expected) {
+			t.Fatal("extra record")
+		}
+		row := result.Record()
+		if row.Value != expected[index] || row.Meta["vsn"] != "A" || row.Timestamp.UnixNano() != 1740787200000000194+int64(index) {
+			t.Fatalf("native record changed: %+v (%T)", row, row.Value)
+		}
+		index++
+	}
+	if result.Err() != nil || index != len(expected) {
+		t.Fatal(index, result.Err())
 	}
 }

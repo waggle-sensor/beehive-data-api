@@ -23,6 +23,7 @@ func TestColdQueryProfileDisabled(t *testing.T) {
 		t.Fatalf("disabled profile: %v %v", p, err)
 	}
 	p.duration("test", coldProfileClock(p))
+	p.value("count", 1)
 	p.mark("test")
 	p.batch(1)
 	p.endOfStream()
@@ -65,6 +66,7 @@ func TestColdQueryProfileReports(t *testing.T) {
 				t.Fatalf("unsafe profiler setup: %v", sql)
 			}
 			p.duration("test_seconds", coldProfileClock(p))
+			p.value("aggregate_hot_rows", 123)
 			p.batch(3)
 			p.batch(4)
 			if status == "complete" {
@@ -74,6 +76,9 @@ func TestColdQueryProfileReports(t *testing.T) {
 				}
 			}
 			if status == "cancelled" {
+				cancel()
+			}
+			if status == "complete" {
 				cancel()
 			}
 			p.finish(status == "failed")
@@ -99,6 +104,9 @@ func TestColdQueryProfileReports(t *testing.T) {
 			}
 			if report.Status != status || report.Rows != 7 || report.Batches != 2 || report.Present != (status == "complete") {
 				t.Fatalf("bad report: %s", raw)
+			}
+			if report.Phases["aggregate_hot_rows"] != 123 {
+				t.Fatal("diagnostic count lost", report.Phases)
 			}
 			if report.DuckDBFile != filepath.Base(p.file) {
 				t.Fatal("profile path must be relative")

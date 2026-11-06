@@ -20,6 +20,7 @@ import (
 
 	"beehive-data-api/internal/arrowio"
 	model "beehive-data-api/internal/query"
+	"beehive-data-api/internal/query/aggregate"
 )
 
 // Backend reads the Iceberg cold tier with DuckDB.
@@ -32,13 +33,17 @@ import (
 // one at a time.
 type Backend struct {
 	coldArrowState
-	DB         *sql.DB
-	connector  *duckdb.Connector
-	Warehouse  string
-	KeyPath    string
-	Client     *http.Client
-	ProfileDir string
-	IOSettings *IOSettings
+	DB            *sql.DB
+	connector     *duckdb.Connector
+	Warehouse     string
+	KeyPath       string
+	Client        *http.Client
+	ProfileDir    string
+	IOSettings    *IOSettings
+	SourceBucket  string // configured hot bucket; a query override must match it
+	encodingMu    sync.Mutex
+	encodingURL   string // last snapshot whose value encoding was read
+	encodingValue string // sage.value.encoding for encodingURL; empty means no uint restoration
 
 	mu     sync.Mutex
 	closed bool
@@ -115,13 +120,46 @@ func NewBackend(warehouse, keyPath string, settings IOSettings) (*Backend, error
 // Query queries the cold backend.
 // Reads version-hint.text, then streams the rows inside the query window.
 func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
+	return backend.query(ctx, query, false, nil)
+}
+
+// QuerySource executes a caller's SQL plan over this tier's raw observations.
+// Source bounds and filters are supplied explicitly; there is no staged context.
+func (backend *Backend) QuerySource(ctx context.Context, query *model.Query, restoreUnsigned bool, plan func(string, time.Time) (string, error)) (model.Results, error) {
+	if query.Func != nil || query.Window != nil || query.Head != nil || query.Tail != nil {
+		return nil, fmt.Errorf("source execution requires raw cold bounds and filters")
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("source SQL plan is required")
+	}
+	if err := backend.ValidateSourceBucket(query); err != nil {
+		return nil, err
+	}
+	return backend.query(ctx, query, restoreUnsigned, plan)
+}
+
+// query runs one cold statement. A caller plan replaces the usual extract SQL.
+// restoreUnsigned asks the snapshot whether stored uint64 decimals must be restored.
+func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUnsigned bool, plan func(string, time.Time) (string, error)) (model.Results, error) {
 	if query.Func != nil {
-		return nil, fmt.Errorf("aggregations are not supported against cold storage")
+		now := time.Now().UTC()
+		_, end, err := aggregate.Bounds(query, now)
+		if err != nil {
+			return nil, err
+		}
+		if query.End == "" {
+			resolved := *query
+			resolved.End = end.Format(time.RFC3339Nano)
+			query = &resolved
+		}
+		if err := backend.ValidateSourceBucket(query); err != nil {
+			return nil, err
+		}
 	}
 
-	var profile *coldQueryProfile
+	profile := coldProfileFromContext(ctx)
 	handedOff := false
-	if arrowio.WantsResult(ctx) && backend.ProfileDir != "" {
+	if profile == nil && arrowio.WantsResult(ctx) && backend.ProfileDir != "" {
 		var profileErr error
 		profile, profileErr = newColdQueryProfile(ctx, backend.ProfileDir)
 		if profileErr != nil {
@@ -172,7 +210,27 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 	arrowResult := arrowio.WantsResult(ctx)
 	now := time.Now().UTC()
 	var statement string
-	if arrowResult {
+	if query.Func != nil || plan != nil {
+		encoding := ""
+		if query.Func != nil || restoreUnsigned {
+			var e error
+			encoding, e = backend.aggregateEncoding(ctx, metadataURL, tok)
+			if e != nil {
+				return nil, e
+			}
+			profile.duration("encoding_metadata_seconds", phaseStart)
+			phaseStart = coldProfileClock(profile)
+		}
+		if plan != nil {
+			var source string
+			source, err = buildColdRawSource(query, metadataURL, encoding, now)
+			if err == nil {
+				statement, err = plan(source, now)
+			}
+		} else {
+			statement, err = buildColdAggregateSQL(query, metadataURL, encoding, now)
+		}
+	} else if arrowResult {
 		statement, err = buildColdArrowSQL(query, metadataURL, now)
 	} else {
 		statement, err = buildColdSQL(query, metadataURL, now)

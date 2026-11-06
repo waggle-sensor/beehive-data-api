@@ -154,6 +154,9 @@ func (coordinator *Coordinator) query(ctx context.Context, query *model.Query, r
 	results, err := route(model.WithColdMetadata(readCtx, view.Metadata), query, frontier)
 	if err != nil {
 		cancel()
+		if errors.Is(err, model.ErrResourceClosureUncertain) {
+			return nil, err // renewal stops; the last confirmed deadline still protects reads
+		}
 		return fail(err)
 	}
 	if err = context.Cause(readCtx); err != nil {
@@ -166,6 +169,8 @@ func (coordinator *Coordinator) query(ctx context.Context, query *model.Query, r
 	return &grantedResults{Results: results, ctx: readCtx, cancel: cancel, release: func() error { return coordinator.release(requestID) }}, nil
 }
 
+// grantedResults keeps the read lease alive while the child stream is open.
+// Close releases the grant once. Parts still exposes the child for native Arrow.
 type grantedResults struct {
 	model.Results
 	ctx      context.Context

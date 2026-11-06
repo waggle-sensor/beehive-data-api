@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -32,6 +33,8 @@ func main() {
 	coldWarehouse := flag.String("cold.warehouse", getenv("COLD_WAREHOUSE", ""), "Iceberg warehouse URL on Pelican; enables the tiered backend when set")
 	coldAsyncThreads := flag.String("cold.async-threads", getenv("COLD_ASYNC_THREADS", "8"), "cold DuckDB asynchronous I/O threads (1..256)")
 	coldReadAhead := flag.String("cold.read-ahead-depth", getenv("COLD_READ_AHEAD_DEPTH", "-1"), "cold DuckDB lookahead: -1 for memory-budgeted automatic, 0 for none")
+	tieredStagingDir := flag.String("tiered.staging-dir", getenv("TIERED_STAGING_DIR", ""), "private parent directory for temporary hot input Parquet")
+	tieredMaxStagingBytes := flag.String("tiered.max-staging-bytes", getenv("TIERED_MAX_STAGING_BYTES", "17179869184"), "maximum uncompressed JSON-equivalent hot input bytes per combined query")
 	coldProfileDir := flag.String("cold.profile-dir", getenv("COLD_PROFILE_DIR", ""), "optional local parent directory for cold Arrow operator profiles and timings")
 	coldFrontier := flag.String("cold.frontier", getenv("COLD_FRONTIER", "static"), "cold frontier mode: static or dynamic")
 	coldBorder := flag.String("cold.border", getenv("COLD_BORDER", ""), "RFC3339 instant; data before it is served from cold, at or after from hot")
@@ -81,6 +84,13 @@ func main() {
 			log.Fatalf("cold backend: %s", err)
 		}
 		defer coldBackend.Close()
+		coldBackend.SourceBucket = *influxdbBucket
+		// The budget counts uncompressed JSON-equivalent hot rows for one
+		// spanning aggregate or head/tail query. The default is 16 GiB.
+		stagingByteBudget, parseErr := strconv.ParseInt(*tieredMaxStagingBytes, 10, 64)
+		if parseErr != nil || stagingByteBudget < 1 {
+			log.Fatal("tiered.max-staging-bytes must be positive")
+		}
 		coldBackend.ProfileDir, err = cold.NewProfileSession(*coldProfileDir)
 		if err != nil {
 			log.Fatalf("cold profile directory: %s", err)
@@ -91,7 +101,7 @@ func main() {
 		if frontier.Mode == "static" {
 			log.Printf("tiered backend: duckdb iceberg_scan on %s, border %s", *coldWarehouse, frontier.Border.Format(time.RFC3339Nano))
 		}
-		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border}
+		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border, TieredStagingDir: *tieredStagingDir, TieredMaxStagingBytes: stagingByteBudget}
 		if frontier.Mode == "dynamic" {
 			tieredBackend.Coordinator = &tiered.Coordinator{URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
 				Bucket: *influxdbBucket, Warehouse: *coldWarehouse, ObserveRenewal: httpapi.ObserveReadRenewal}

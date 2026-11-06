@@ -5,6 +5,9 @@ package tiered
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -225,8 +228,8 @@ func TestTieredMergeIsOrderedAndLazy(t *testing.T) {
 }
 
 // TestTieredRefusesWhatItCannotSplit tests the tiered refuses what it cannot split.
-// Aggregations and head/tail cannot be split. Both must refuse rather than
-// return a plausible wrong answer.
+// A backend without combined-execution capabilities must refuse spanning
+// aggregates and limits rather than independently applying them in each tier.
 func TestTieredRefusesWhatItCannotSplit(t *testing.T) {
 	const wm = "2025-05-15T00:00:00Z"
 	mean := "mean"
@@ -474,5 +477,186 @@ func TestColdFrontierConfiguration(t *testing.T) {
 		if _, err := ParseFrontier(o); err == nil {
 			t.Fatal("invalid configuration accepted", o)
 		}
+	}
+}
+
+type recordingSource struct {
+	recordingBackend
+	sourceQuery     *model.Query
+	restoreUnsigned bool
+	statement       string
+	sourceErr       error
+	closeErr        error
+	rejectBucket    bool
+	profile         model.QueryProfile
+	hotRows         *testutil.Results
+}
+
+func (b *recordingSource) ValidateSourceBucket(*model.Query) error {
+	if b.rejectBucket {
+		return fmt.Errorf("bucket not covered")
+	}
+	return nil
+}
+func (b *recordingSource) BeginQueryProfile(ctx context.Context) (context.Context, model.QueryProfile) {
+	if b.profile != nil {
+		return model.WithQueryProfile(ctx, b.profile), b.profile
+	}
+	return ctx, model.NoQueryProfile{}
+}
+func (b *recordingSource) QuerySource(_ context.Context, q *model.Query, restore bool, plan func(string, time.Time) (string, error)) (model.Results, error) {
+	copyQuery := *q
+	b.sourceQuery = &copyQuery
+	b.restoreUnsigned = restore
+	var err error
+	b.statement, err = plan("SELECT * FROM cold_observations", time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if b.hotRows != nil && !b.hotRows.Closed {
+		return nil, fmt.Errorf("hot source still open at native execution")
+	}
+	if b.sourceErr != nil {
+		return nil, b.sourceErr
+	}
+	return &closeErrorResults{err: b.closeErr}, nil
+}
+
+type recordingRawHot struct {
+	recordingBackend
+	raw  *model.Query
+	rows *testutil.Results
+}
+
+func (b *recordingRawHot) QueryRawSource(_ context.Context, q *model.Query) (model.Results, error) {
+	copyQuery := *q
+	b.raw = &copyQuery
+	if b.rows == nil {
+		b.rows = &testutil.Results{}
+	}
+	return b.rows, nil
+}
+func TestTieredSpanningOperationsOwnRawInputs(t *testing.T) {
+	border := mustTime(t, "2025-05-15T00:00:00.000000194Z")
+	now := mustTime(t, "2025-05-20T00:00:00.000000195Z")
+	for _, operation := range []string{"mean", "head", "tail"} {
+		t.Run(operation, func(t *testing.T) {
+			hot, cold := &recordingRawHot{}, &recordingSource{}
+			scratch := t.TempDir()
+			backend := &Backend{Hot: hot, Cold: cold, Border: border, TieredStagingDir: scratch, now: func() time.Time { return now }}
+			q := &model.Query{Start: "-10d", Filter: map[string]string{"name": "t"}}
+			n, window := 2, "5m"
+			switch operation {
+			case "mean":
+				q.Func = &operation
+				q.Window = &window
+				q.Head = &n
+			case "head":
+				q.Head = &n
+			case "tail":
+				q.Tail = &n
+			}
+			result, err := backend.Query(context.Background(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer result.Close()
+			if cold.calls != 0 || hot.calls != 0 || cold.sourceQuery == nil || hot.raw == nil {
+				t.Fatal("operation was independently executed on a tier")
+			}
+			if cold.sourceQuery.End != border.Format(time.RFC3339Nano) || hot.raw.Start != border.Format(time.RFC3339Nano) || hot.raw.End != now.Format(time.RFC3339Nano) {
+				t.Fatal("input bounds changed", cold.sourceQuery, hot.raw)
+			}
+			for _, raw := range []*model.Query{cold.sourceQuery, hot.raw} {
+				if raw.Func != nil || raw.Window != nil || raw.Head != nil || raw.Tail != nil {
+					t.Fatal("operation pushed into a raw slice", raw)
+				}
+			}
+			if cold.sourceQuery.Start != now.Add(-10*24*time.Hour).Format(time.RFC3339Nano) || cold.restoreUnsigned != (operation == "mean") {
+				t.Fatal("source range or scalar restoration changed")
+			}
+			if q.Start != "-10d" || q.End != "" {
+				t.Fatal("caller query mutated")
+			}
+			if !strings.Contains(cold.statement, "UNION ALL") || !strings.Contains(cold.statement, "read_parquet(") {
+				t.Fatal("tiered raw union missing", cold.statement)
+			}
+			if operation != "mean" && !strings.Contains(cold.statement, "WITH raw_candidates AS MATERIALIZED") {
+				t.Fatal("validated selector missing")
+			}
+			entries, err := os.ReadDir(scratch)
+			if err != nil || len(entries) != 1 {
+				t.Fatal("scratch not retained until result close", entries, err)
+			}
+			if err = result.Close(); err != nil {
+				t.Fatal(err)
+			}
+			entries, err = os.ReadDir(scratch)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("scratch leaked", entries, err)
+			}
+		})
+	}
+}
+
+// A staged file must outlive native consumption, but not a confirmed close.
+type closeErrorResults struct {
+	testutil.Results
+	err error
+}
+
+func (r *closeErrorResults) Close() error { r.Closed = true; return r.err }
+func TestTieredStagingOwnershipOnExecutionFailure(t *testing.T) {
+	for _, mode := range []string{"native-failure", "unconfirmed-close", "bucket-rejected"} {
+		t.Run(mode, func(t *testing.T) {
+			rows := &testutil.Results{}
+			hot := &recordingRawHot{rows: rows}
+			profile := &recordingStageProfile{phases: map[string]float64{}}
+			cold := &recordingSource{hotRows: rows, profile: profile}
+			failure := errors.New("execution failure")
+			switch mode {
+			case "native-failure":
+				cold.sourceErr = failure
+			case "unconfirmed-close":
+				cold.closeErr = failure
+			case "bucket-rejected":
+				cold.rejectBucket = true
+			}
+			scratch := t.TempDir()
+			border := mustTime(t, "2025-03-01T12:00:00Z")
+			backend := &Backend{Hot: hot, Cold: cold, Border: border, TieredStagingDir: scratch}
+			n := 1
+			result, err := backend.Query(context.Background(), &model.Query{Start: "2025-03-01T00:00:00Z", End: "2025-03-02T00:00:00Z", Head: &n})
+			if mode == "unconfirmed-close" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = result.Close(); !errors.Is(err, failure) {
+					t.Fatal("closure error lost", err)
+				}
+				entries, e := os.ReadDir(scratch)
+				if e != nil || len(entries) != 1 {
+					t.Fatal("scratch removed with unconfirmed native closure", entries, e)
+				}
+			} else {
+				if err == nil || result != nil {
+					t.Fatal("execution failure lost", err)
+				}
+				entries, e := os.ReadDir(scratch)
+				if e != nil || len(entries) != 0 {
+					t.Fatal("setup scratch leaked", entries, e)
+				}
+				if !profile.failed {
+					t.Fatal("failed setup profile was not finalized")
+				}
+			}
+			if mode == "bucket-rejected" {
+				if hot.raw != nil {
+					t.Fatal("hot read began before bucket validation")
+				}
+			} else if !rows.Closed {
+				t.Fatal("hot source not closed")
+			}
+		})
 	}
 }

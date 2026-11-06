@@ -25,6 +25,18 @@ type Backend struct {
 
 // Query converts and makes a query to an Influx backend.
 func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
+	return backend.query(ctx, query, false)
+}
+
+// QueryRawSource validates the managed value-field contract for aggregate
+// and spanning head/tail staging.
+func (backend *Backend) QueryRawSource(ctx context.Context, query *model.Query) (model.Results, error) {
+	return backend.query(ctx, query, true)
+}
+
+// query runs one Flux query. validateField rejects any field other than value
+// so a staged aggregate cannot mix Flux fields into one series.
+func (backend *Backend) query(ctx context.Context, query *model.Query, validateField bool) (model.Results, error) {
 	fluxQuery, err := buildFluxQuery(backend.Bucket, query)
 	if err != nil {
 		return nil, err
@@ -37,15 +49,16 @@ func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Re
 		return nil, err
 	}
 
-	return &influxResults{results: results, useStartTimestamp: query.Func != nil && query.Window == nil}, nil
+	return &influxResults{results: results, validateValueField: validateField, useStartTimestamp: query.Func != nil && query.Window == nil}, nil
 }
 
 // influxResults is the results for the influx backend.
 type influxResults struct {
-	results           *api.QueryTableResult
-	record            *model.Record
-	err               error
-	useStartTimestamp bool
+	results            *api.QueryTableResult
+	record             *model.Record
+	err                error
+	useStartTimestamp  bool
+	validateValueField bool
 }
 
 // Err returns the error for the influx results.
@@ -78,6 +91,9 @@ func (r *influxResults) Next() bool {
 // convertToAPIRecord maps one Flux row onto the public record. The measurement
 // name and _value are required to have their Flux types.
 func (r *influxResults) convertToAPIRecord(rec *influxdb2query.FluxRecord) (*model.Record, error) {
+	if r.validateValueField && rec.Values()["_field"] != "value" {
+		return nil, fmt.Errorf("aggregation requires the single value-field contract")
+	}
 	apirec := &model.Record{}
 
 	name, ok := rec.Values()["_measurement"].(string)

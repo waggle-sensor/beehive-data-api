@@ -51,6 +51,7 @@ func (b *inner) Query(ctx context.Context, query *model.Query) (model.Results, e
 	}
 	return b.res, nil
 }
+
 // fixture serves one successful acquire, a failing renew, and one release.
 // The acquired frontier is 2025-03-02 and coverage starts on 2025-03-01.
 // Renewal cannot extend that deadline. Release is refused until the inner
@@ -84,6 +85,7 @@ func fixture(t *testing.T) (*Backend, *inner, *int) {
 	})}
 	return b, in, released
 }
+
 // TestReadViewPinsMetadataUntilResultCloses keeps the grant through the
 // query and releases it once. A second close does not release again. The
 // wrapper still exposes the single child stream used by native Arrow.
@@ -108,6 +110,7 @@ func TestReadViewPinsMetadataUntilResultCloses(t *testing.T) {
 		t.Fatal(*released)
 	}
 }
+
 // TestQueryFailureReleasesAndCloseFailureHolds releases the grant when the
 // query itself fails, and holds it when closing the result fails.
 func TestQueryFailureReleasesAndCloseFailureHolds(t *testing.T) {
@@ -126,6 +129,7 @@ func TestQueryFailureReleasesAndCloseFailureHolds(t *testing.T) {
 		t.Fatal(e, *released)
 	}
 }
+
 // TestCoordinatorFailureNeverFallsBack rejects the query when acquire
 // cannot reach the coordinator.
 func TestCoordinatorFailureNeverFallsBack(t *testing.T) {
@@ -267,5 +271,15 @@ func TestDynamicRelativeStartResolvesBeforeCoverage(t *testing.T) {
 	}
 	if in.got != nil || *released != 1 {
 		t.Fatal("coverage rejection routed or leaked", in.got, *released)
+	}
+}
+
+func TestSetupUncertainClosureWaitsForLeaseExpiry(t *testing.T) {
+	b, _, released := fixture(t)
+	_, err := b.Coordinator.query(context.Background(), &model.Query{Start: "2025-03-01T00:00:00Z", End: "2025-03-01T01:00:00Z"}, func(context.Context, *model.Query, time.Time) (model.Results, error) {
+		return nil, model.ErrResourceClosureUncertain
+	})
+	if !errors.Is(err, model.ErrResourceClosureUncertain) || *released != 0 {
+		t.Fatal("uncertain setup released a live grant", err, *released)
 	}
 }

@@ -34,8 +34,8 @@ Send a JSON object. `start` is required; unknown fields are rejected.
 | `head` | integer | First N rows per series; use either head or tail |
 | `tail` | integer | Last N rows per series; use either head or tail |
 | `bucket` | string | Override the hot Influx bucket; has no effect on the cold warehouse |
-| `experimental_func` | string | Hot-side aggregation; see support matrix |
-| `experimental_window` | string | Hot-side aggregation interval, requiring a function |
+| `experimental_func` | string | Aggregation; see support matrix |
+| `experimental_window` | string | Aggregation interval, requiring a function |
 
 RFC3339 fractional seconds can retain nine digits, for example `2025-03-01T00:00:00.026403194Z`. Cold queries preserve that nanosecond bound. Relative bounds such as `-1h` use the same Flux duration units the hot service forwards (`ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `mo`, `y`, with an optional leading sign). The tiered router resolves both bounds once, in UTC, against the API clock, then routes that absolute window. An omitted `end` still means no upper bound and reaches the hot tier. A cold execution with an omitted end resolves its bound to the request's current time. The Python client may resolve relative inputs before sending; the API accepts either form.
 
@@ -54,15 +54,27 @@ A value without `*` or `|` uses exact equality. A value containing either select
 | Ordinary filtered extract | Yes | Yes | Yes, cold then hot |
 | Absolute bounds | Yes | Yes | Yes |
 | Direct relative bounds | Yes, resolved by Flux | Yes, resolved before the query | Yes, resolved before the split |
-| `head` or `tail` | Yes, per Flux table | Yes, per series | Rejected |
-| Aggregation | Yes | Rejected | Rejected |
+| `head` or `tail` | Yes, per Flux table | Yes, per series | Yes, once per canonical series over both tiers |
+| Aggregation | Yes, Flux | Yes, DuckDB | Yes, one aggregate over raw hot/cold input |
 | Bucket override in static mode | Yes | Ignored | Applies only to hot part |
 
 With `COLD_FRONTIER=dynamic`, every stored query is checked against the coordinator's declared coverage and configured bucket, even when its range is entirely hot. An override to another bucket or a start before coverage is rejected. The API acquires one consistent routing border and cold snapshot per request; callers do not need to choose a storage tier. See [frontier configuration](configuration.md#dynamic-vs-static-cold-frontier).
 
 Without a window, supported hot functions are `mean`, `min`, `max`, `sum`, and `count`. With a window, the function and interval are passed to Flux's `aggregateWindow`; Flux performs further validation. A window without a function is rejected. Buckets beginning with `_` are rejected by the hot backend.
 
-Cold SQL explicitly orders by timestamp. Hot results retain Flux's iteration order; do not assume a global timestamp sort across every hot series. The router concatenates the disjoint cold and hot ranges. Ordering among rows with equal timestamps is not a stable tie-break contract.
+Cold SQL explicitly orders by timestamp. Hot results retain Flux's iteration order; do not assume a global timestamp sort across every hot series. The router concatenates the disjoint cold and hot ranges for ordinary crossing extracts. Spanning head/tail stages the hot slice in private Parquet, then orders the combined selection by timestamp. It must read/stage hot input and complete selection before streaming; a small limit does not guarantee a cheap query. Spanning head/tail uses the configured staging-byte budget and the managed single `value`-field contract. With an omitted end, it freezes the API request time as the exclusive bound. A window requires an aggregation function. Ordering among rows with equal timestamps is not a stable tie-break contract.
+
+## Aggregation across storage tiers
+
+Cold-only and spanning queries accept `count`, `mean`, `sum`, `min`, and `max`. A spanning query reads the hot slice with ordinary Flux, stages those raw records as private Parquet, and aggregates them together with the pinned Iceberg scan. The mean is taken over every raw value in that combined input. A hot-only query keeps the existing Flux functions, and a whole-range Flux read on that path can still omit mixed native kinds. Cold and spanning arithmetic reject a detected mix. Callers use the same query fields: the API does not discover shards and does not add a loader endpoint for aggregation.
+
+A series is the measurement name plus every tag. The order of metadata keys does not create another series. When an aggregate also sets `head` or `tail`, those limits choose each series' input rows before the function runs. Standalone spanning `head` or `tail` uses that same series identity and returns the original observations. A bucket override on an aggregate, or on spanning head/tail that touches cold, must equal `INFLUXDB_BUCKET`. That check applies in static mode as well.
+
+A cold or spanning window is either a positive fixed duration or a calendar interval. Fixed units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, and `w`, and they may be combined, as in `1h30m`. Calendar units are `mo` and `y`. Fixed windows lie on the Unix epoch grid, so a week begins on Thursday. Calendar windows are counted from January 1970. Each output timestamp is the end of its window, clipped to the request end. A query without a window uses the request start. When an aggregate that touches cold omits `end`, that instant is frozen once for the whole query. An empty window of a series that was observed is null, and it is zero for `count`. A series with no rows in the range is omitted.
+
+`count` includes every record. `sum`, `mean`, `min`, and `max` require one numeric kind for the series: signed integers, unsigned integers, or floats. Strings, booleans, and a mix of kinds fail the query. Integer sums and integer mean accumulators keep the Flux 64-bit wrapping behavior covered by the tests. When the snapshot carries the unsigned VARIANT marker, those stored decimals are restored to uint64 before this arithmetic. The public `value` field and the four-column Arrow and NDJSON schemas stay the same.
+
+One aggregate may expand to at most 1,000,000 series and window rows. Hot staging also has a byte budget, 16 GiB by default. Crossing either limit fails the query with a resource error, and the response is the full failure rather than a shortened aggregate. The staging settings are in [configuration](configuration.md#scratch-space-and-unsigned-values).
 
 ## NDJSON response
 

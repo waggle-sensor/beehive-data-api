@@ -1,7 +1,7 @@
 // backend.go splits one query at a nanosecond border. Cold is read first and
 // hot continues only when the window crosses the border. Relative bounds are
-// resolved once before that decision. Aggregations, head, and tail are refused
-// when the resolved window spans the border.
+// resolved once before that decision. Spanning aggregates use one raw union;
+// standalone spanning head/tail uses one combined per-series selection.
 
 package tiered
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	model "beehive-data-api/internal/query"
+	"beehive-data-api/internal/query/aggregate"
 )
 
 // Backend routes static and dynamically coordinated queries across hot/cold tiers.
@@ -22,11 +23,13 @@ import (
 // NANOSECONDS so v3 cold and hot rows meet at exactly one half-open boundary.
 // Both tiers preserve nanosecond timestamps.
 type Backend struct {
-	Hot         model.Backend
-	Cold        model.Backend
-	Border      time.Time
-	Coordinator *Coordinator
-	now         func() time.Time // the clock used to resolve relative bounds; tests pin it
+	Hot                   model.Backend
+	Cold                  model.Backend
+	TieredStagingDir      string // parent for private hot Parquet; empty uses the system temp directory
+	TieredMaxStagingBytes int64  // uncompressed JSON-equivalent byte budget for one combined query
+	Border                time.Time
+	Coordinator           *Coordinator
+	now                   func() time.Time // the clock used to resolve relative bounds; tests pin it
 }
 
 // clock is the instant both relative bounds are measured from.
@@ -40,10 +43,15 @@ func (backend *Backend) clock() time.Time {
 // Query resolves relative bounds, then routes to one tier or splits across both.
 // The caller's query is not modified. Dynamic coverage sees the resolved start.
 func (backend *Backend) Query(ctx context.Context, query *model.Query) (model.Results, error) {
-	resolved, err := resolveRelativeBounds(query, backend.clock())
+	now := backend.clock()
+	resolved, err := resolveRelativeBounds(query, now)
 	if err != nil {
 		return nil, err
 	}
+	if resolved.Func != nil || resolved.Head != nil || resolved.Tail != nil {
+		ctx = context.WithValue(ctx, requestClockKey{}, now)
+	}
+
 	if backend.Coordinator != nil {
 		return backend.Coordinator.query(ctx, resolved, backend.queryAt)
 	}
@@ -55,6 +63,15 @@ func (backend *Backend) queryAt(ctx context.Context, query *model.Query, border 
 	start, err := parseQueryTime(query.Start, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("invalid start timestamp %q: %w", query.Start, err)
+	}
+	if (query.Func != nil || query.Head != nil || query.Tail != nil) && query.End == "" && start.Before(border) {
+		now, ok := ctx.Value(requestClockKey{}).(time.Time)
+		if !ok {
+			now = backend.clock()
+		}
+		copyQuery := *query
+		copyQuery.End = now.UTC().Format(time.RFC3339Nano)
+		query = &copyQuery
 	}
 	// An empty end means "no upper bound", which always reaches into hot.
 	end, err := parseQueryTime(query.End, maxTime)
@@ -77,24 +94,16 @@ func (backend *Backend) queryAt(ctx context.Context, query *model.Query, border 
 
 	// Spanning the border from here on.
 
-	// Aggregations cannot be split. A mean of two per-tier means is wrong
-	// without the counts to weight them, and silently returning a plausible
-	// wrong number is worse than refusing.
-	if query.Func != nil {
-		return nil, fmt.Errorf("aggregation %q spans the hot/cold boundary at %s and cannot be computed across tiers; narrow the range to one side",
-			*query.Func, border.Format(time.RFC3339Nano))
-	}
-
-	// head/tail are PER SERIES in Flux, not global -- they are table
-	// operations. Concatenating each tier's per-series head would return up
-	// to 2n records per series, which is a wrong answer rather than a
-	// degraded one. Reapplying the limit during the merge would require
-	// tracking every series seen, which is unbounded at this cardinality
-	// (one seeded day alone has ~905k series). Refusing is the honest
-	// option and keeps the semantics the client already relies on.
-	if query.Head != nil || query.Tail != nil {
-		return nil, fmt.Errorf("head/tail spans the hot/cold boundary at %s; these are per-series limits and cannot be merged across tiers; narrow the range to one side",
-			border.Format(time.RFC3339Nano))
+	if query.Func != nil || query.Head != nil || query.Tail != nil {
+		if query.Func != nil {
+			_, end, err = aggregate.Bounds(query, backend.clock())
+		} else {
+			_, end, err = SelectionBounds(query, backend.clock())
+		}
+		if err != nil {
+			return nil, err
+		}
+		return backend.stageHotQuery(ctx, query, border, end)
 	}
 
 	coldQuery := *query
@@ -119,6 +128,10 @@ func (backend *Backend) queryAt(ctx context.Context, query *model.Query, border 
 	// buffering either side.
 	return &tieredResults{first: coldResults, second: hotResults}, nil
 }
+
+// requestClockKey carries the instant used for an omitted aggregate or
+// selection end, so routing and execution share one clock reading.
+type requestClockKey struct{}
 
 // maxTime stands in for "no upper bound" on a query with no end.
 var maxTime = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)

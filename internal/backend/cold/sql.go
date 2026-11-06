@@ -10,11 +10,15 @@ import (
 	"time"
 
 	model "beehive-data-api/internal/query"
+	"beehive-data-api/internal/query/aggregate"
 )
+
+// uintEncoding names snapshots whose uint64 values are stored as decimals.
+const uintEncoding = "variant-uint64-decimal-v1"
 
 // Promoted tag columns on the Iceberg `obs` table. Every other filter key
 // lives in the `meta` map. Same split cold_backend.py uses.
-var promotedTags = []string{"plugin", "vsn", "node", "host", "task", "job", "zone"}
+var promotedTags = aggregate.PromotedTags()
 
 // isPromotedTag checks if a field is a promoted tag.
 func isPromotedTag(field string) bool {
@@ -28,7 +32,7 @@ func isPromotedTag(field string) bool {
 
 // sqlQuote quotes a string for use in a SQL statement.
 func sqlQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	return aggregate.Quote(s)
 }
 
 // buildColdSQL compiles a Beehive query into one DuckDB statement that reads
@@ -86,12 +90,7 @@ func coldArrowProjectionWithMeta(inner, meta string) string {
 
 // promotedTagMap preserves the historical key ordering and null handling.
 func promotedTagMap() string {
-	keys, vals := make([]string, len(promotedTags)), make([]string, len(promotedTags))
-	for i, tag := range promotedTags {
-		keys[i], vals[i] = sqlQuote(tag), tag
-	}
-	return fmt.Sprintf("map_from_entries(list_filter(list_zip([%s], [%s]), lambda x : x[2] IS NOT NULL))",
-		strings.Join(keys, ", "), strings.Join(vals, ", "))
+	return aggregate.PromotedTagMap()
 }
 
 // coldMetaJSONExpr emits exactly the existing JSON object. Promoted JSON omits
@@ -235,15 +234,42 @@ func buildColdSource(query *model.Query, metadataURL string, now time.Time, rawM
 	return inner, nil
 }
 
-// parseColdTime parses a time string into a time.Time.
+// aggregationValue restores a uint64 VARIANT when the snapshot used decimal
+// storage. Any other encoding leaves the stored value unchanged.
+func aggregationValue(value, encoding string) string {
+	if encoding != uintEncoding {
+		return value
+	}
+	return "CASE WHEN variant_typeof(" + value + ") IN ('DECIMAL(20, 0)','DECIMAL(38, 0)') THEN CASE WHEN " + value + "::DECIMAL(38,0) BETWEEN 0 AND 18446744073709551615 THEN " + value + "::UBIGINT::VARIANT ELSE error('invalid encoded uint64') END ELSE " + value + " END"
+}
+
+// buildColdAggregateSQL scans this tier's raw rows and reduces them with the shared plan.
+func buildColdAggregateSQL(query *model.Query, metadata, encoding string, now time.Time) (string, error) {
+	source, err := buildColdRawSource(query, metadata, encoding, now)
+	if err != nil {
+		return "", err
+	}
+	return aggregate.BuildSQL(query, source, now)
+}
+
+// buildColdRawSource exposes filtered cold rows without reducing observations.
+func buildColdRawSource(query *model.Query, metadata, encoding string, now time.Time) (string, error) {
+	raw := *query
+	raw.Func = nil
+	raw.Window = nil
+	raw.Head = nil
+	raw.Tail = nil
+	cold, err := buildColdSource(&raw, metadata, now, true)
+	if err != nil {
+		return "", err
+	}
+	source := "SELECT timestamp,name,meta," + strings.Join(promotedTags, ",") + "," + aggregationValue("value", encoding) + " AS value FROM (" + cold + ")"
+	return source, nil
+}
+
+// parseColdTime delegates to the shared absolute-time parser.
 func parseColdTime(s string, fallback time.Time) (time.Time, error) {
-	if s == "" {
-		return fallback, nil
-	}
-	if s[0] == '-' || s[0] == '+' {
-		return time.Time{}, fmt.Errorf("relative timestamps are not supported by the cold backend; use an absolute RFC3339 timestamp")
-	}
-	return time.Parse(time.RFC3339, s)
+	return aggregate.ParseTime(s, fallback)
 }
 
 // filterToSQL converts a filter field and pattern into a SQL predicate.

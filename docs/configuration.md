@@ -17,6 +17,8 @@ Flags normally override environment defaults. An explicitly set empty environmen
 | `-cold.warehouse` | `COLD_WAREHOUSE` | empty | Warehouse base URL; nonempty enables tiered routing |
 | `-cold.async-threads` | `COLD_ASYNC_THREADS` | `8` | Integer from 1 through 256; checked when cold is enabled |
 | `-cold.read-ahead-depth` | `COLD_READ_AHEAD_DEPTH` | `-1` | `-1` automatic memory-budgeted lookahead, or `0` disabled; checked when cold is enabled |
+| `-tiered.staging-dir` | `TIERED_STAGING_DIR` | empty (OS temporary directory) | Parent directory for private per-request hot staging for aggregates and spanning head/tail; provision writable scratch space |
+| `-tiered.max-staging-bytes` | `TIERED_MAX_STAGING_BYTES` | `17179869184` (16 GiB) | Positive uncompressed JSON-equivalent hot-input byte limit per aggregation request |
 | `-cold.profile-dir` | `COLD_PROFILE_DIR` | empty | Local profile parent directory; empty disables profiling |
 | `-cold.frontier` | `COLD_FRONTIER` | `static` | `dynamic` or `static`; trims whitespace and is case-insensitive; invalid/empty values fail startup |
 | `-cold.border` | `COLD_BORDER` | empty | Required with a warehouse in static mode; RFC3339 boundary, including fractional seconds; must be unset in dynamic mode |
@@ -109,3 +111,15 @@ Grants carry `expires_at`, set by the coordinator's `--read-lease-duration` (def
 The lease duration is configured on `beehive-hot-to-cold-loader`, not the API. An initial grant expires at acquisition time plus that duration. Each successful renewal refreshes expiry to renewal time plus the duration, without shortening an already later deadline. No further lease duration is added after the last confirmed deadline. With the default duration, a renewal confirmed at 12:10 gives expiry at 12:40; if renewals stop, deletion can proceed after grace at 12:41.
 
 Renewal runs outside row/batch iteration, including while a request waits for cold execution. Each renewal request has a 30-second timeout bounded by the confirmed expiry. Temporary failures retry after at most one second (sooner near expiry). An independent watchdog cancels at the confirmed expiry even if a renewal request hangs. A still-active but stuck request can keep renewing; this is crash/connection-loss recovery, not progress-based stall detection.
+
+## Scratch space and unsigned values
+
+Spanning aggregates and standalone head/tail stage the hot slice under `-tiered.staging-dir` (`TIERED_STAGING_DIR`). Each request gets a private directory and writes its typed raw hot records directly to Zstd Parquet. A batch holds at most 65,536 rows or 8 MiB of input. One larger record is still accepted when it fits the request budget. Every string must be valid UTF-8 before it is written.
+
+`-tiered.max-staging-bytes` (`TIERED_MAX_STAGING_BYTES`, 16 GiB by default) charges that input as uncompressed JSON-equivalent bytes, once per request. Also provision disk for other requests running at the same time, for the compressed Parquet files, and for DuckDB spill. The Go buffers that assemble each batch sit outside DuckDB's 3 GB limit.
+
+The Parquet file stays until the native result closes. A failed or canceled request deletes scratch it still owns. When the native close itself fails, the files remain, because another reader may still have them open. A process crash can leave the same private directories behind. Remove them only after that process and its native readers are gone.
+
+Cold-only aggregates read Iceberg directly and write no hot staging files. Ordinary extracts keep their existing execution path.
+
+A table marked `sage.value.encoding=variant-uint64-decimal-v1` stores selected uint64 values as reserved zero-scale decimals. Aggregates restore those values to uint64 after checking that each one falls in range, and leave every other kind as stored. The API reads the marker from the pinned snapshot and remembers only the latest snapshot it has inspected. Any other marker fails the aggregate. An unmarked table keeps each value's stored kind, so a decimal becomes uint64 only when this marker names it. Ordinary extracts still return the stored value. Follow the loader's warehouse policy before publishing encoded data.
