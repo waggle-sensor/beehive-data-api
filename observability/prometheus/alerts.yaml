@@ -1,0 +1,40 @@
+# Initial examples; tune thresholds to the deployment's measured traffic/SLOs.
+groups:
+  - name: beehive-data-api
+    rules:
+      - alert: BeehiveDataAPIUnavailable
+        expr: up{job="beehive-data-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Data API {{ $labels.instance }} is unavailable'
+      - alert: BeehiveDataAPIQueryFailures
+        expr: (sum by(job,instance,format) (rate(dataapi_queries_total{job="beehive-data-api",outcome=~"backend_error|stream_error|close_error|panic"}[10m])) / sum by(job,instance,format) (rate(dataapi_queries_total{job="beehive-data-api",outcome=~"success|backend_error|stream_error|close_error|panic"}[10m])) > 0.05) and on(job,instance,format) (sum by(job,instance,format) (increase(dataapi_queries_total{job="beehive-data-api",outcome=~"success|backend_error|stream_error|close_error|panic"}[10m])) >= 20)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.format }} query failures exceed 5% on {{ $labels.instance }}'
+          description: 'Uses outcomes, including failures after HTTP 200. Invalid requests and cancellations are not server failures.'
+      - alert: BeehiveDataAPIResourceCloseErrors
+        expr: sum by(job,instance,format) (increase(dataapi_query_errors_total{job="beehive-data-api",stage="close"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Query resource cleanup is failing on {{ $labels.instance }}'
+      - alert: BeehiveDataAPISSEBrokerErrors
+        expr: sum by(job,instance) (increase(dataapi_stream_errors_total{job="beehive-data-api",stage=~"dial|channel|queue|bind|consume|broker_close"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'SSE broker errors on {{ $labels.instance }}'
+      - alert: BeehiveDataAPIReadRenewalErrors
+        expr: sum by(job,instance) (rate(hot_to_cold_read_renewals_total{job="beehive-data-api",outcome="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Dynamic reader renewals are failing on {{ $labels.instance }}'

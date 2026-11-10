@@ -1,0 +1,197 @@
+# API guide
+
+[Documentation index](README.md)
+>NOTE: more details [here](https://github.com/waggle-sensor/waggle-beehive-v2/blob/main/docs/querying-measurements.md).
+
+## Routes
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/v1/query` | Query stored measurements |
+| `GET /api/v0/stream` | Receive live measurement events over SSE |
+| `GET /metrics` | Prometheus metrics |
+| `/` | Redirect to the public data-access tutorial |
+
+The query examples use POST. The current query handler does not explicitly reject other methods; callers should use the documented POST interface.
+
+## Query request
+
+Send a JSON object. `start` is required; unknown fields are rejected.
+
+```json
+{
+  "start": "2025-03-01T00:00:00Z",
+  "end": "2025-03-01T00:01:00Z",
+  "filter": {"name": "wxt.env.temp", "vsn": "W0A0"}
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `start` | string | Inclusive start instant; use an absolute RFC3339 timestamp |
+| `end` | string | Exclusive end instant; may be omitted |
+| `filter` | object of strings | Measurement name and metadata predicates combined with AND; omitted means no predicates |
+| `head` | integer | First N rows per series; use either head or tail |
+| `tail` | integer | Last N rows per series; use either head or tail |
+| `bucket` | string | Override the hot Influx bucket; has no effect on the cold warehouse |
+| `experimental_func` | string | Aggregation; see support matrix |
+| `experimental_window` | string | Aggregation interval, requiring a function |
+
+RFC3339 fractional seconds can retain nine digits, for example `2025-03-01T00:00:00.026403194Z`. Cold queries preserve that nanosecond bound. Relative bounds such as `-1h` use the same Flux duration units the hot service forwards (`ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `mo`, `y`, with an optional leading sign). The tiered router resolves both bounds once, in UTC, against the API clock, then routes that absolute window. An omitted `end` still means no upper bound and reaches the hot tier. A cold execution with an omitted end resolves its bound to the request's current time. The Python client may resolve relative inputs before sending; the API accepts either form.
+
+Limits are per series, not a global response-row limit. Cold series are partitioned by measurement name and assembled metadata; hot limits follow Flux tables. Do not supply both `head` and `tail`. Cold limits must be >= 0; zero selects no rows. Hot-only validation ultimately also depends on Flux.
+
+### Filters
+
+Use `name` for the measurement and bare metadata keys such as `vsn`, `node`, `plugin`, or `sensor`. Do not use dataframe column names such as `meta.vsn`. Filter keys must match `^[a-zA-Z_][a-zA-Z0-9_]*$`.
+
+A value without `*` or `|` uses exact equality. A value containing either selects an anchored regular-expression path, not a shell glob. For example, `W0A0|W0A1` matches either complete value; `wxt.*` matches names starting with `wxt`. A dot in an exact value such as `wxt.env.temp` stays literal; in regex mode it has regex meaning. Hot and cold use different regex engines, and a shared validator restricts accepted strings. Use simple patterns and do not assume arbitrary regex syntax is supported across both tiers.
+
+### Backend support
+
+| Capability | Hot only | Cold only | Spans border |
+| --- | --- | --- | --- |
+| Ordinary filtered extract | Yes | Yes | Yes, cold then hot |
+| Absolute bounds | Yes | Yes | Yes |
+| Direct relative bounds | Yes, resolved by Flux | Yes, resolved before the query | Yes, resolved before the split |
+| `head` or `tail` | Yes, per Flux table | Yes, per series | Yes, once per canonical series over both tiers |
+| Aggregation | Yes, Flux | Yes, DuckDB | Yes, one aggregate over raw hot/cold input |
+| Bucket override in static mode | Yes | Ignored | Applies only to hot part |
+
+With `COLD_FRONTIER=dynamic`, every stored query is checked against the coordinator's declared coverage and configured bucket, even when its range is entirely hot. An override to another bucket or a start before coverage is rejected. The API acquires one consistent routing border and cold snapshot per request; callers do not need to choose a storage tier. See [frontier configuration](configuration.md#dynamic-vs-static-cold-frontier).
+
+Without a window, supported hot functions are `mean`, `min`, `max`, `sum`, and `count`. With a window, the function and interval are passed to Flux's `aggregateWindow`; Flux performs further validation. A window without a function is rejected. Buckets beginning with `_` are rejected by the hot backend.
+
+Cold SQL explicitly orders by timestamp. Hot results retain Flux's iteration order; do not assume a global timestamp sort across every hot series. The router concatenates the disjoint cold and hot ranges for ordinary crossing extracts. Spanning head/tail stages the hot slice in private Parquet, then orders the combined selection by timestamp. It must read/stage hot input and complete selection before streaming; a small limit does not guarantee a cheap query. Spanning head/tail uses the configured staging-byte budget and the managed single `value`-field contract. With an omitted end, it freezes the API request time as the exclusive bound. A window requires an aggregation function. Ordering among rows with equal timestamps is not a stable tie-break contract.
+
+## Aggregation across storage tiers
+
+Cold-only and spanning queries accept `count`, `mean`, `sum`, `min`, and `max`. A spanning query reads the hot slice with ordinary Flux, stages those raw records as private Parquet, and aggregates them together with the pinned Iceberg scan. The mean is taken over every raw value in that combined input. A hot-only query keeps the existing Flux functions, and a whole-range Flux read on that path can still omit mixed native kinds. Cold and spanning arithmetic reject a detected mix. Callers use the same query fields: the API does not discover shards and does not add a loader endpoint for aggregation.
+
+A series is the measurement name plus every tag. The order of metadata keys does not create another series. When an aggregate also sets `head` or `tail`, those limits choose each series' input rows before the function runs. Standalone spanning `head` or `tail` uses that same series identity and returns the original observations. A bucket override on an aggregate, or on spanning head/tail that touches cold, must equal `INFLUXDB_BUCKET`. That check applies in static mode as well.
+
+A cold or spanning window is either a positive fixed duration or a calendar interval. Fixed units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, and `w`, and they may be combined, as in `1h30m`. Calendar units are `mo` and `y`. Fixed windows lie on the Unix epoch grid, so a week begins on Thursday. Calendar windows are counted from January 1970. Each output timestamp is the end of its window, clipped to the request end. A query without a window uses the request start. When an aggregate that touches cold omits `end`, that instant is frozen once for the whole query. An empty window of a series that was observed is null, and it is zero for `count`. A series with no rows in the range is omitted.
+
+`count` includes every record. `sum`, `mean`, `min`, and `max` require one numeric kind for the series: signed integers, unsigned integers, or floats. Strings, booleans, and a mix of kinds fail the query. Integer sums and integer mean accumulators keep the Flux 64-bit wrapping behavior covered by the tests. When the snapshot carries the unsigned VARIANT marker, those stored decimals are restored to uint64 before this arithmetic. The public `value` field and the four-column Arrow and NDJSON schemas stay the same.
+
+One aggregate may expand to at most 1,000,000 series and window rows. Hot staging also has a byte budget, 16 GiB by default. Crossing either limit fails the query with a resource error, and the response is the full failure rather than a shortened aggregate. The staging settings are in [configuration](configuration.md#scratch-space-and-unsigned-values).
+
+## NDJSON response
+
+NDJSON is the default when the request does not accept Arrow. Each complete line contains one record with `timestamp`, `name`, `value`, and `meta`.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/x-ndjson' \
+  --data-binary '{"start":"2025-03-01T00:00:00Z","end":"2025-03-01T00:01:00Z","filter":{"name":"wxt.env.temp","vsn":"W0A0"}}' \
+  http://localhost:10000/api/v1/query > measurements.ndjson
+```
+
+Example record (illustrative metadata):
+
+```json
+{"timestamp":"2025-03-01T00:00:00.026403194Z","name":"wxt.env.temp","value":11.7,"meta":{"vsn":"W0A0"}}
+```
+
+`timestamp` is an RFC3339 JSON string, not an integer epoch. `value` is a native JSON value, not the Arrow field's JSON text. Metadata is an open tag object; nullable metadata can occur in the shared record representation. Cold JSON values retain integer digits rather than passing through float64 conversion. Use an exact-integer decoder when that distinction matters.
+
+The handler names downloads `sage-download-<timestamp>.ndjson`. It does not explicitly set an NDJSON media type; do not depend on receiving `application/x-ndjson` in the response header. The service does not implement HTTP gzip compression for this path.
+
+## Arrow response
+
+Request `Accept: application/vnd.apache.arrow.stream`. The response is an IPC **stream**, not an Arrow file or Parquet file.
+
+| Field | Arrow type | Meaning |
+| --- | --- | --- |
+| `timestamp` | `timestamp[ns]`, no timezone annotation | UTC instant |
+| `name` | UTF-8 string | Measurement name |
+| `value` | UTF-8 string | JSON text for the measurement value |
+| `meta` | UTF-8 string | JSON text for the tag object |
+
+The schema permits nulls. Decode non-null `value` and `meta` strings as JSON. For example, value text `11.7` decodes to a number, while text `"image.jpg"` decodes to a string. JSON integer text such as `9007199254740993` retains all digits. Stored VARIANT and MAP types are not exposed as Arrow wire fields. Hot, cold, and combined responses use this same schema.
+
+Arrow responses set `Content-Type: application/vnd.apache.arrow.stream`, `X-Arrow-Compression: zstd|lz4|none`, and a `.arrows` download name. Zstd is the default. Compression applies to IPC buffers, not HTTP `Content-Encoding`. The codec is set by the operator, not a per-request header.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/vnd.apache.arrow.stream' \
+  --data-binary '{"start":"2025-03-01T00:00:00Z","end":"2025-03-01T00:01:00Z","filter":{"name":"wxt.env.temp","vsn":"W0A0"}}' \
+  http://localhost:10000/api/v1/query > measurements.arrows
+```
+
+Decode batches with PyArrow, which handles IPC compression:
+
+```python
+import json
+import pyarrow.ipc as ipc
+
+with open("measurements.arrows", "rb") as stream:
+    with ipc.open_stream(stream) as reader:
+        for batch in reader:
+            values = [json.loads(v) if v is not None else None
+                      for v in batch.column("value").to_pylist()]
+            metadata = [json.loads(v) if v is not None else None
+                        for v in batch.column("meta").to_pylist()]
+            print(batch.num_rows, values[:1], metadata[:1])
+```
+
+### Sage Data Client
+
+With the matching client installed, `query()` negotiates Arrow, falls back to NDJSON according to the response media type, and returns a pandas dataframe. A released client may differ from the workspace implementation.
+
+```python
+import sage_data_client
+
+frame = sage_data_client.query(
+    start="2025-03-01T00:00:00Z",
+    end="2025-03-01T00:01:00Z",
+    filter={"name": "wxt.env.temp", "vsn": "W0A0"},
+    endpoint="http://localhost:10000/api/v1/query",
+)
+print(frame[["timestamp", "name", "value", "meta.vsn"]].head())
+```
+
+Metadata becomes `meta.<key>` columns. The client retains nanosecond bounds and resolves relative inputs such as `-1h` before sending absolute timestamps. It still builds a complete dataframe, so batch decoding does not eliminate memory needed for the final result.
+
+## Errors and partial results
+
+Errors use plain text, not a structured JSON error envelope.
+
+| Situation | Current behavior |
+| --- | --- |
+| Empty body, malformed JSON, unknown field, missing start, invalid filter key | HTTP 400 |
+| Request exceeds 4096 bytes | HTTP 400; message incorrectly says “must be <1KB” |
+| Backend startup/query error, invalid backend filter/time, unsupported cold operation | HTTP 500 |
+| Arrow encoding/fetch failure after headers | HTTP framing is aborted; clients must treat it as failure |
+| NDJSON iteration failure or reader-lease loss after headers | Error is logged and HTTP framing is aborted; clients must treat the extract as failed |
+
+HTTP 200 and valid individual rows do not establish completeness. Clients must consume the entire response and check transport/decoder errors; discard partial output from a failed extract. When completeness matters, verify expected counts/content independently. Dynamic reader leases renew during healthy requests, so their default 30-minute duration is not a maximum query time. If renewal fails through the last confirmed expiry, the API cancels the query. Retry with a new request to acquire current routing; coordinator failures do not fall back to static routing. Large cold queries may wait for scan and sort before producing their first batch; an open connection alone is not evidence of a stall.
+
+## Live SSE measurements
+
+The SSE endpoint uses RabbitMQ, independently of stored-query routing.
+
+```sh
+curl --get --no-buffer --fail-with-body \
+  --data-urlencode 'name=wxt.env.temp' \
+  --data-urlencode 'vsn=W0A0' \
+  http://localhost:10000/api/v0/stream
+```
+
+Responses use `text/event-stream` and emit:
+
+```text
+event: message
+data: {"name":"wxt.env.temp","timestamp":"2025-03-01T00:00:00Z","value":11.7,"meta":{"vsn":"W0A0"}}
+
+```
+
+Idle keepalives are SSE comments: `:keepalive` followed by a blank line. The heartbeat defaults to 15 seconds and resets when broker messages arrive. The connection ends when the client disconnects; no replay cursor is provided.
+
+SSE filters differ from stored queries: `name` selects RabbitMQ topics, splitting alternatives on `|`; when omitted it subscribes to `#`. Other query parameters become Go regex matches against metadata, without automatic anchoring. The handler uppercases the `vsn` filter and lowercases `node`. There is no `start`/`end` history selection on this endpoint.
+
+Non-GET stream requests return 405, invalid regex filters return 400, and broker setup failures return 502. Query and stream responses enable `Access-Control-Allow-Origin: *` once response setup succeeds; this is not a complete browser preflight implementation.
+
+Source references: [request/response handler](../internal/httpapi/query.go), [Arrow schema and encoder](../internal/arrowio/response.go), and [SSE handler](../internal/httpapi/stream.go).

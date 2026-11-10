@@ -1,4 +1,6 @@
 *
 !go.mod
 !go.sum
-!**/*.go
+!main.go
+!internal/
+!internal/**
