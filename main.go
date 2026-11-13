@@ -31,6 +31,8 @@ func main() {
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
 	influxdbTimeout := flag.Duration("influxdb.timeout", mustParseDuration(getenv("INFLUXDB_TIMEOUT", "15m")), "influxdb client timeout")
 	coldWarehouse := flag.String("cold.warehouse", getenv("COLD_WAREHOUSE", ""), "Iceberg warehouse URL on Pelican; enables the tiered backend when set")
+	coldNamespace := flag.String("cold.namespace", getenv("ICEBERG_NAMESPACE", model.DefaultNamespace), "Iceberg namespace")
+	coldTableName := flag.String("cold.table-name", getenv("ICEBERG_TABLE_NAME", model.DefaultTableName), "Iceberg table name")
 	coldAsyncThreads := flag.String("cold.async-threads", getenv("COLD_ASYNC_THREADS", "8"), "cold DuckDB asynchronous I/O threads (1..256)")
 	coldReadAhead := flag.String("cold.read-ahead-depth", getenv("COLD_READ_AHEAD_DEPTH", "-1"), "cold DuckDB lookahead: -1 for memory-budgeted automatic, 0 for none")
 	tieredStagingDir := flag.String("tiered.staging-dir", getenv("TIERED_STAGING_DIR", ""), "private parent directory for temporary hot input Parquet")
@@ -45,6 +47,10 @@ func main() {
 	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
 	streamHeartbeatDuration := flag.Duration("stream.heartbeat-duration", mustParseDuration(getenv("STREAM_HEARTBEAT_DURATION", "15s")), "stream heartbeat duration")
 	flag.Parse()
+	tableIdentity, tableErr := model.NewTableIdentity(*coldNamespace, *coldTableName)
+	if tableErr != nil {
+		log.Fatal(tableErr)
+	}
 	compression, err := arrowio.ParseCompression(*arrowCompressionFlag)
 	if err != nil {
 		log.Fatal(err)
@@ -79,7 +85,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		coldBackend, err := cold.NewBackend(*coldWarehouse, *pelicanKey, ioSettings)
+		coldBackend, err := cold.NewBackend(*coldWarehouse, *pelicanKey, ioSettings, tableIdentity)
 		if err != nil {
 			log.Fatalf("cold backend: %s", err)
 		}
@@ -103,9 +109,9 @@ func main() {
 		}
 		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border, TieredStagingDir: *tieredStagingDir, TieredMaxStagingBytes: stagingByteBudget}
 		if frontier.Mode == "dynamic" {
-			tieredBackend.Coordinator = &tiered.Coordinator{URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
+			tieredBackend.Coordinator = &tiered.Coordinator{Table: tableIdentity, URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
 				Bucket: *influxdbBucket, Warehouse: *coldWarehouse, ObserveRenewal: httpapi.ObserveReadRenewal}
-			log.Printf("dynamic tiered routing enabled; frontier and snapshot pinned per request")
+			log.Printf("dynamic tiered routing enabled; table=%s.%s; frontier and snapshot pinned per request", tableIdentity.Namespace(), tableIdentity.Name())
 		}
 		backend = tieredBackend
 	}

@@ -32,6 +32,7 @@ import (
 // is installed as an http secret, which is database-global, so queries run
 // one at a time.
 type Backend struct {
+	Table model.TableIdentity
 	coldArrowState
 	DB            *sql.DB
 	connector     *duckdb.Connector
@@ -67,7 +68,7 @@ func (backend *Backend) Close() error {
 
 // NewBackend opens DuckDB and loads the httpfs and iceberg extensions.
 // The first call downloads those extensions; later connections only LOAD them.
-func NewBackend(warehouse, keyPath string, settings IOSettings) (*Backend, error) {
+func NewBackend(warehouse, keyPath string, settings IOSettings, table model.TableIdentity) (*Backend, error) {
 	warehouse = strings.TrimRight(warehouse, "/")
 	if warehouse == "" {
 		return nil, fmt.Errorf("cold warehouse is empty")
@@ -108,6 +109,7 @@ func NewBackend(warehouse, keyPath string, settings IOSettings) (*Backend, error
 	}
 	log.Printf("cold DuckDB %s threads=2 memory_limit=3GB async_threads=%d read_ahead_depth=%d", engineVersion, settings.AsyncThreads, settings.ReadAheadDepth)
 	return &Backend{
+		Table:      table,
 		DB:         db,
 		connector:  connector,
 		Warehouse:  warehouse,
@@ -197,9 +199,9 @@ func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUn
 		if err != nil {
 			return nil, err
 		}
-		metadataURL = fmt.Sprintf("%s/sage/obs/metadata/%s.metadata.json", backend.Warehouse, stem)
+		metadataURL = fmt.Sprintf("%s/metadata/%s.metadata.json", backend.Table.Location(backend.Warehouse), stem)
 	} else {
-		prefix := backend.Warehouse + "/sage/obs/metadata/"
+		prefix := backend.Table.Location(backend.Warehouse) + "/metadata/"
 		if !strings.HasPrefix(metadataURL, prefix) || !strings.HasSuffix(metadataURL, ".metadata.json") ||
 			!validHintStem(strings.TrimSuffix(strings.TrimPrefix(metadataURL, prefix), ".metadata.json")) {
 			return nil, fmt.Errorf("managed metadata is outside the configured table")
@@ -287,7 +289,7 @@ func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUn
 
 // readHint reads the version-hint.text file.
 func (backend *Backend) readHint(ctx context.Context, tok string) (string, error) {
-	hintURL := backend.Warehouse + "/sage/obs/metadata/version-hint.text"
+	hintURL := backend.Table.Location(backend.Warehouse) + "/metadata/version-hint.text"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hintURL, nil)
 	if err != nil {
 		return "", err

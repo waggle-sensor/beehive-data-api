@@ -13,7 +13,7 @@ import (
 // TestBuildColdSQL tests the build cold SQL.
 func TestBuildColdSQL(t *testing.T) {
 	now := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	url := "https://example.test/sage/obs/metadata/00002-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.metadata.json"
+	url := "https://example.test/sage/observations/metadata/00002-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.metadata.json"
 	q := &model.Query{
 		Start:  "2025-03-01T00:00:00Z",
 		End:    "2025-03-01T00:01:00Z",

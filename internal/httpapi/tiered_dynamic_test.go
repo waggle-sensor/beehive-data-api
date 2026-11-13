@@ -67,7 +67,7 @@ func TestDynamicTieredHTTPFormatsPinViewAndReleaseAfterClose(t *testing.T) {
 		if strings.HasSuffix(req.URL.Path, "acquire") {
 			acquired++
 			frontier = time.Date(2025, 3, 1+acquired, 0, 0, 0, 0, time.UTC)
-			selected = warehouse + "/sage/obs/metadata/head-" + frontier.Format("20060102") + ".metadata.json"
+			selected = warehouse + "/sage/observations/metadata/head-" + frontier.Format("20060102") + ".metadata.json"
 			payload, _ = json.Marshal(tiered.View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Warehouse: warehouse, Metadata: selected, Frontier: frontier.Format(time.RFC3339Nano), CoverageStart: "2025-03-01T00:00:00Z"})
 		} else {
 			if active == nil || !active.Closed {

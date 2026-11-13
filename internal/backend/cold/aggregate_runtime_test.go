@@ -6,6 +6,7 @@ import (
 	"beehive-data-api/internal/backend/hot"
 	"beehive-data-api/internal/backend/tiered"
 	"beehive-data-api/internal/httpapi"
+	model "beehive-data-api/internal/query"
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -85,7 +86,7 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 	}
 	metadataBytes := append([]byte(nil), raw...)
 	warehousePath := "/sage/aggregation-parity/warehouse"
-	metadataPath := warehousePath + "/sage/obs/metadata/" + filepath.Base(manifest.Metadata)
+	metadataPath := warehousePath + "/sage/observations/metadata/" + filepath.Base(manifest.Metadata)
 	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != metadataPath {
 			http.NotFound(w, r)
@@ -108,7 +109,7 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 	if err = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	backend, err := NewBackend(storage.URL+warehousePath, keyPath, defaultColdIOSettings())
+	backend, err := NewBackend(storage.URL+warehousePath, keyPath, defaultColdIOSettings(), model.TableIdentity{})
 	if err != nil {
 		t.Fatal(err)
 	}

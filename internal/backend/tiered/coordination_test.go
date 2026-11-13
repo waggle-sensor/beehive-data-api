@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -73,7 +74,7 @@ func fixture(t *testing.T) (*Backend, *inner, *int) {
 		}
 		payload := `{"ok":true}`
 		if strings.HasSuffix(r.URL.Path, "acquire") {
-			raw, _ := json.Marshal(View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Warehouse: base, Metadata: base + "/sage/obs/metadata/head.metadata.json", Frontier: "2025-03-02T00:00:00Z", CoverageStart: "2025-03-01T00:00:00Z"})
+			raw, _ := json.Marshal(View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Warehouse: base, Metadata: base + "/sage/observations/metadata/head.metadata.json", Frontier: "2025-03-02T00:00:00Z", CoverageStart: "2025-03-01T00:00:00Z"})
 			payload = string(raw)
 		} else {
 			if !in.res.closed && !in.fail {
@@ -281,5 +282,55 @@ func TestSetupUncertainClosureWaitsForLeaseExpiry(t *testing.T) {
 	})
 	if !errors.Is(err, model.ErrResourceClosureUncertain) || *released != 0 {
 		t.Fatal("uncertain setup released a live grant", err, *released)
+	}
+}
+
+func TestManagedMetadataUsesConfiguredTable(t *testing.T) {
+	for _, matches := range []bool{true, false} {
+		t.Run(fmt.Sprint(matches), func(t *testing.T) {
+			backend, in, _ := fixture(t)
+			identity, err := model.NewTableIdentity("telemetry", "readings")
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend.Coordinator.Table = identity
+			original := backend.Coordinator.Client.Transport
+			backend.Coordinator.Client.Transport = transport(func(r *http.Request) (*http.Response, error) {
+				response, err := original.RoundTrip(r)
+				if err != nil || !strings.HasSuffix(r.URL.Path, "acquire") || !matches {
+					return response, err
+				}
+				var view View
+				if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				view.Metadata = identity.Location(view.Warehouse) + "/metadata/head.metadata.json"
+				payload, _ := json.Marshal(view)
+				response.Body = io.NopCloser(strings.NewReader(string(payload)))
+				return response, nil
+			})
+			// Rejected acquires release their grant before any inner query runs.
+			in.fail = !matches
+			results, err := backend.Query(context.Background(), &model.Query{Start: "2025-03-01T00:00:00Z", End: "2025-03-01T01:00:00Z"})
+			if !matches {
+				if err == nil || !strings.Contains(err.Error(), "invalid managed metadata URL") {
+					t.Fatal(err)
+				}
+				if in.got != nil {
+					t.Fatal("queried a different table")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(in.metadata, "/telemetry/readings/metadata/") {
+				t.Fatal(in.metadata)
+			}
+			if err := results.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

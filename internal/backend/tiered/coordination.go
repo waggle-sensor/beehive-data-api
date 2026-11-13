@@ -36,6 +36,7 @@ type View struct {
 
 // Coordinator configures dynamic frontier discovery for the tiered backend.
 type Coordinator struct {
+	Table model.TableIdentity
 	// ObserveRenewal is optional and does not participate in lease decisions.
 	ObserveRenewal                       func(outcome string, seconds float64)
 	URL, Token, Bucket, Owner, Warehouse string
@@ -142,7 +143,7 @@ func (coordinator *Coordinator) query(ctx context.Context, query *model.Query, r
 	if start.Before(frontier) {
 		metadataURL, err := url.Parse(view.Metadata)
 		warehouseURL, warehouseErr := url.Parse(coordinator.Warehouse)
-		if err != nil || warehouseErr != nil || view.Metadata == "" || metadataURL.Scheme != warehouseURL.Scheme || metadataURL.Host != warehouseURL.Host || metadataURL.RawQuery != "" || metadataURL.Fragment != "" || metadataURL.RawPath != "" || metadataURL.User != nil || !strings.HasPrefix(metadataURL.Path, warehouseURL.Path+"/sage/obs/metadata/") || strings.Contains(metadataURL.Path, "..") || !strings.HasSuffix(metadataURL.Path, ".metadata.json") {
+		if err != nil || warehouseErr != nil || view.Metadata == "" || metadataURL.Scheme != warehouseURL.Scheme || metadataURL.Host != warehouseURL.Host || metadataURL.RawQuery != "" || metadataURL.Fragment != "" || metadataURL.RawPath != "" || metadataURL.User != nil || !strings.HasPrefix(metadataURL.Path, coordinator.Table.Location(warehouseURL.Path)+"/metadata/") || strings.Contains(metadataURL.Path, "..") || !strings.HasSuffix(metadataURL.Path, ".metadata.json") {
 			return fail(errors.New("invalid managed metadata URL"))
 		}
 	}

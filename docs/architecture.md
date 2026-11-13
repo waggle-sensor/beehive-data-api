@@ -131,7 +131,7 @@ Promoted tags are merged into public metadata with the existing collision preced
 
 Marked tables set `sage.value.encoding` to `variant-uint64-decimal-v1`. Aggregates then restore those reserved zero-scale decimal VARIANT values to uint64 after range validation. Unmarked tables keep the stored kind, and an unsupported marker fails the aggregate. Ordinary extracts still serialize the stored value directly.
 
-For the deployed URL layout, the warehouse base is `https://<host>/sage/<isolated-prefix>/warehouse`. The API reads `<base>/sage/obs/metadata/version-hint.text` in static mode, validates the metadata stem and opens `<base>/sage/obs/metadata/<stem>.metadata.json`. Dynamic mode validates and opens the coordinator's pinned metadata URL instead. Referenced metadata, manifests and data objects must remain accessible. The API is a reader; it does not publish snapshots or write warehouse files.
+For the deployed URL layout, the warehouse base is `https://<host>/sage/cold/lakehouse`. The API reads `<base>/<namespace>/<table-name>/metadata/version-hint.text` in static mode, validates the metadata stem and opens `<base>/<namespace>/<table-name>/metadata/<stem>.metadata.json`. Dynamic mode validates and opens the coordinator's pinned metadata URL instead. Referenced metadata, manifests and data objects must remain accessible. The API is a reader; it does not publish snapshots or write warehouse files.
 
 The adopted writer policy uses day partitions, chronological file batches of at most 10 million rows, rows sorted by plugin then vsn then time within a file, and plugin-pure row groups capped at 262,144 rows. Large plugins span multiple groups; small plugins can share files. This is warehouse writer policy, not a geometry constraint validated by the API on each request.
 
@@ -144,3 +144,8 @@ Configuration parsing, the shared router, the coordinator client and lease renew
 Result closure stops renewal and cancels the query context, then closes the underlying resources. Successful closure releases the grant once; uncertain closure leaves it to expire automatically. A lost acquire response can also leave a grant until expiry. Lease expiry allows deletion progress despite uncertain closure; it does not prove all remote work has terminated. Keep host clocks synchronized. Leases do not renew Pelican credentials or override caller, Influx-client or reverse-proxy deadlines.
 
 This lets the archiver publish and verify a day, activate its cold coverage, then drain old hot readers before deleting that day from Influx. Public response schemas are unchanged. See [configuration](configuration.md#dynamic-vs-static-cold-frontier) and the [archival design](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/12_dynamic_archival_service.md).
+
+The table identity is configured by `ICEBERG_NAMESPACE` and
+`ICEBERG_TABLE_NAME`, defaulting to `sage.observations`. Both the cold reader
+and dynamic coordinator validate paths against that identity. These settings
+must match the loader; namespace changes are not automatic migrations.
