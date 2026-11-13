@@ -1,5 +1,5 @@
 // pelican_token.go mints the read token DuckDB presents to Pelican. The issuer,
-// key ID, and audience are fixed so the token matches the warehouse's trust.
+// key ID, and audience are fixed so the token matches the lakehouse's trust.
 
 package cold
 
@@ -91,17 +91,17 @@ func loadPelicanKey(path string) (*ecdsa.PrivateKey, error) {
 	return jwt.ParseECPrivateKeyFromPEM(pem)
 }
 
-// readScope derives read:/<prefix> from .../sage/<prefix>/warehouse.
+// readScope derives read:/<prefix> from .../sage/<prefix>/lakehouse.
 // The token covers that prefix and nothing beside it.
-func readScope(warehouse string) (string, error) {
-	u, err := url.Parse(warehouse)
+func readScope(lakehouse string) (string, error) {
+	u, err := url.Parse(lakehouse)
 	if err != nil {
 		return "", err
 	}
 	path := strings.TrimPrefix(u.Path, "/sage/")
 	seg := strings.SplitN(path, "/", 2)[0]
 	if seg == "" || strings.Contains(seg, "..") {
-		return "", fmt.Errorf("warehouse %q has no prefix to scope a token to", warehouse)
+		return "", fmt.Errorf("lakehouse %q has no prefix to scope a token to", lakehouse)
 	}
 	return "read:/" + seg, nil
 }

@@ -19,7 +19,7 @@ func TestReadHintUsesConfiguredTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := &Backend{Warehouse: "https://origin/sage/cold/lakehouse", Table: identity,
+	backend := &Backend{Lakehouse: "https://origin/sage/cold/lakehouse", Table: identity,
 		Client: &http.Client{Transport: tableTransport(func(r *http.Request) (*http.Response, error) {
 			if r.URL.Path != "/sage/cold/lakehouse/telemetry/readings/metadata/version-hint.text" {
 				t.Fatal(r.URL)

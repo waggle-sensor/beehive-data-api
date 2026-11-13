@@ -21,14 +21,14 @@ import (
 // publishes a format-version 3 table through DuckDB's
 // Iceberg writer, then reads it back with iceberg_scan and no catalog. That is
 // the API's reader. The table stores timestamptz_ns and one value VARIANT.
-// COLD_V3_ENDPOINT is the REST catalog and COLD_V3_ROOT is the warehouse
+// COLD_V3_ENDPOINT is the REST catalog and COLD_V3_ROOT is the lakehouse
 // directory mounted at the same path inside the catalog. The test skips when
-// either is unset, and it does not touch Pelican or the published v2 warehouse.
+// either is unset, and it does not touch Pelican or the published v2 lakehouse.
 func TestIcebergV3RoundTrip(t *testing.T) {
 	endpoint := os.Getenv("COLD_V3_ENDPOINT")
 	root := os.Getenv("COLD_V3_ROOT")
 	if endpoint == "" || root == "" {
-		t.Skip("set COLD_V3_ENDPOINT and COLD_V3_ROOT to an isolated Iceberg REST warehouse")
+		t.Skip("set COLD_V3_ENDPOINT and COLD_V3_ROOT to an isolated Iceberg REST lakehouse")
 	}
 
 	ctx := context.Background()

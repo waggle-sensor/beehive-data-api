@@ -28,7 +28,7 @@ CGO_ENABLED=1 go test -tags=duckdb_arrow ./internal/backend/hot ./internal/backe
 CGO_ENABLED=1 go test -tags=duckdb_arrow ./internal/backend/cold
 ```
 
-Existing coverage includes metric compatibility and bounded labels, Arrow/NDJSON latency/outcome/byte accounting, cleanup and late errors, SSE deliveries/flush failures, dashboard metric references, public schema across tiers, compression, metadata/null/value semantics, nanosecond bounds, routing, native streaming, cancellation, error propagation, profiles and result cleanup. Cold native tests can need extension downloads even when not using a live warehouse. Tests explicitly requiring a REST fixture or probe inputs skip unless configured.
+Existing coverage includes metric compatibility and bounded labels, Arrow/NDJSON latency/outcome/byte accounting, cleanup and late errors, SSE deliveries/flush failures, dashboard metric references, public schema across tiers, compression, metadata/null/value semantics, nanosecond bounds, routing, native streaming, cancellation, error propagation, profiles and result cleanup. Cold native tests can need extension downloads even when not using a live lakehouse. Tests explicitly requiring a REST fixture or probe inputs skip unless configured.
 
 Preserve the ownership contract: the handler closes the enclosing result; composite encoding borrows ordered parts, and `arrowio.WriteReader` borrows a record reader without releasing it. Check failure and cancellation paths when changing anything that holds the cold backend lock. For dynamic routing, cover renewal during query setup and streaming, fixed snapshot/border across renewals, expiry after renewal failure, close/release ordering, and rejection of expired or changed views. The tiered suite includes static and dynamic routing, configuration validation and lease watchdog tests. It can run without native DuckDB or live coordinator services:
 
@@ -43,16 +43,16 @@ These focused checks do not replace the full tagged suite or native HTTP tests.
 
 `TestIcebergV3RoundTrip` writes a fresh table through DuckDB's Iceberg REST writer and reads the committed metadata directly. It exercises nanoseconds, VARIANT values, HTTP Arrow/NDJSON, head/tail and tiered responses.
 
-It requires a separately provisioned **isolated** REST catalog. The local warehouse path must be mounted at the same absolute path inside that catalog. These commands assume that fixture is already running; they do not provision it:
+It requires a separately provisioned **isolated** REST catalog. The local lakehouse path must be mounted at the same absolute path inside that catalog. These commands assume that fixture is already running; they do not provision it:
 
 ```sh
 export COLD_V3_ENDPOINT='http://127.0.0.1:18186'
-export COLD_V3_ROOT='/absolute/path/to/fresh-isolated-test-warehouse'
+export COLD_V3_ROOT='/absolute/path/to/fresh-isolated-test-lakehouse'
 CGO_ENABLED=1 go test -tags=duckdb_arrow -count=1 \
   -run '^TestIcebergV3RoundTrip$' ./internal/backend/cold
 ```
 
-Do not point test writers at a published warehouse or `/node-data`. The test skips if either variable is unset. `COLD_V3_HTTP_FIXTURE_DIR` optionally exports actual HTTP response fixtures into a separate fresh directory for replay by the matching Sage Data Client tests. It is an export location, not the catalog warehouse. Fixture export refuses to overwrite existing response files.
+Do not point test writers at a published lakehouse or `/node-data`. The test skips if either variable is unset. `COLD_V3_HTTP_FIXTURE_DIR` optionally exports actual HTTP response fixtures into a separate fresh directory for replay by the matching Sage Data Client tests. It is an export location, not the catalog lakehouse. Fixture export refuses to overwrite existing response files.
 
 For an ordinary suite run, unset stale integration/export variables:
 
@@ -92,6 +92,6 @@ The cold memory probe uses `arrowio.WriteReader`; it is not a private cold write
 
 ## Validation practice
 
-Check formatting, the pinned tagged suite, vet and the image build for changes that affect execution or packaging. Add regression coverage for actual behavior and ownership changes rather than tests that mirror implementation details. For docs-only edits, validate commands, examples and links without starting services or writing warehouse data.
+Check formatting, the pinned tagged suite, vet and the image build for changes that affect execution or packaging. Add regression coverage for actual behavior and ownership changes rather than tests that mirror implementation details. For docs-only edits, validate commands, examples and links without starting services or writing lakehouse data.
 
 Record which checks passed, skipped or could not run. An isolated build with substitute cached dependencies is useful diagnostic evidence, but is not a successful pinned/native build. Run the full suite in an environment with the required dependencies before considering that validation complete.

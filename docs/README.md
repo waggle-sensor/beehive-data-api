@@ -19,7 +19,7 @@ These guides describe the current Beehive Data API source. They do not imply tha
 - [Configuration](configuration.md): all startup flags and environment variables, defaults and fixed engine settings.
 - [Architecture](architecture.md): package boundaries, query execution, resource ownership and cold storage contracts.
 - [Metrics and Grafana](metrics.md): format-specific latency, query/SSE outcomes, throughput, renewal and dashboard provisioning.
-- [Operations](operations.md): local/Docker startup, cold warehouse setup, metrics, profiling and troubleshooting.
+- [Operations](operations.md): local/Docker startup, cold lakehouse setup, metrics, profiling and troubleshooting.
 - [Development](development.md): build requirements, tests, native fixtures and experiment probes.
 
 Configuration is an operator concern. API callers choose the response format through `Accept`; they do not select the storage tier, engine version, compression codec or I/O pool for each request.

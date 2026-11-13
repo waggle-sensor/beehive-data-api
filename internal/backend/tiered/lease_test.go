@@ -17,7 +17,7 @@ import (
 
 func TestRenewingLeaseOutlivesInitialExpiry(t *testing.T) {
 	expiry := time.Now().Add(300 * time.Millisecond)
-	view := View{ID: "read", Warehouse: "warehouse", Metadata: "pinned", Frontier: "frontier", CoverageStart: "coverage", Generation: 4}
+	view := View{ID: "read", Lakehouse: "lakehouse", Metadata: "pinned", Frontier: "frontier", CoverageStart: "coverage", Generation: 4}
 	var renewals atomic.Int32
 	b := &Coordinator{URL: "https://coordinator", Token: "secret", Bucket: "waggle"}
 	b.Client = &http.Client{Transport: transport(func(req *http.Request) (*http.Response, error) {

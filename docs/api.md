@@ -33,7 +33,7 @@ Send a JSON object. `start` is required; unknown fields are rejected.
 | `filter` | object of strings | Measurement name and metadata predicates combined with AND; omitted means no predicates |
 | `head` | integer | First N rows per series; use either head or tail |
 | `tail` | integer | Last N rows per series; use either head or tail |
-| `bucket` | string | Override the hot Influx bucket; has no effect on the cold warehouse |
+| `bucket` | string | Override the hot Influx bucket; has no effect on the cold lakehouse |
 | `experimental_func` | string | Aggregation; see support matrix |
 | `experimental_window` | string | Aggregation interval, requiring a function |
 

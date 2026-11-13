@@ -60,9 +60,9 @@ func (b *inner) Query(ctx context.Context, query *model.Query) (model.Results, e
 func fixture(t *testing.T) (*Backend, *inner, *int) {
 	t.Helper()
 	released := new(int)
-	base := "https://origin/sage/cold-storage-archive-test/warehouse"
+	base := "https://origin/sage/cold-storage-archive-test/lakehouse"
 	in := &inner{res: &result{}}
-	b := &Backend{Hot: in, Cold: in, Coordinator: &Coordinator{URL: "https://coordinator", Token: "secret", Bucket: "waggle", Owner: "pod", Warehouse: base}}
+	b := &Backend{Hot: in, Cold: in, Coordinator: &Coordinator{URL: "https://coordinator", Token: "secret", Bucket: "waggle", Owner: "pod", Lakehouse: base}}
 	b.Coordinator.Client = &http.Client{Transport: transport(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatal("missing auth")
@@ -74,7 +74,7 @@ func fixture(t *testing.T) (*Backend, *inner, *int) {
 		}
 		payload := `{"ok":true}`
 		if strings.HasSuffix(r.URL.Path, "acquire") {
-			raw, _ := json.Marshal(View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Warehouse: base, Metadata: base + "/sage/observations/metadata/head.metadata.json", Frontier: "2025-03-02T00:00:00Z", CoverageStart: "2025-03-01T00:00:00Z"})
+			raw, _ := json.Marshal(View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Lakehouse: base, Metadata: base + "/sage/observations/metadata/head.metadata.json", Frontier: "2025-03-02T00:00:00Z", CoverageStart: "2025-03-01T00:00:00Z"})
 			payload = string(raw)
 		} else {
 			if !in.res.closed && !in.fail {
@@ -305,7 +305,7 @@ func TestManagedMetadataUsesConfiguredTable(t *testing.T) {
 					t.Fatal(err)
 				}
 				response.Body.Close()
-				view.Metadata = identity.Location(view.Warehouse) + "/metadata/head.metadata.json"
+				view.Metadata = identity.Location(view.Lakehouse) + "/metadata/head.metadata.json"
 				payload, _ := json.Marshal(view)
 				response.Body = io.NopCloser(strings.NewReader(string(payload)))
 				return response, nil

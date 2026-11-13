@@ -1,6 +1,6 @@
 // Command beehive-data-api serves measurements from InfluxDB and, when a
-// warehouse is configured, an Iceberg cold tier. Cold routing stays off
-// until COLD_WAREHOUSE is set.
+// lakehouse is configured, an Iceberg cold tier. Cold routing stays off
+// until COLD_LAKEHOUSE is set.
 
 package main
 
@@ -30,7 +30,7 @@ func main() {
 	influxdbToken := flag.String("influxdb.token", getenv("INFLUXDB_TOKEN", ""), "influxdb token")
 	influxdbBucket := flag.String("influxdb.bucket", getenv("INFLUXDB_BUCKET", ""), "influxdb bucket")
 	influxdbTimeout := flag.Duration("influxdb.timeout", mustParseDuration(getenv("INFLUXDB_TIMEOUT", "15m")), "influxdb client timeout")
-	coldWarehouse := flag.String("cold.warehouse", getenv("COLD_WAREHOUSE", ""), "Iceberg warehouse URL on Pelican; enables the tiered backend when set")
+	coldLakehouse := flag.String("cold.lakehouse", getenv("COLD_LAKEHOUSE", ""), "Iceberg lakehouse URL on Pelican; enables the tiered backend when set")
 	coldNamespace := flag.String("cold.namespace", getenv("COLD_NAMESPACE", model.DefaultNamespace), "Iceberg namespace")
 	coldTableName := flag.String("cold.table-name", getenv("COLD_TABLE_NAME", model.DefaultTableName), "Iceberg table name")
 	coldAsyncThreads := flag.String("cold.async-threads", getenv("COLD_ASYNC_THREADS", "8"), "cold DuckDB asynchronous I/O threads (1..256)")
@@ -43,7 +43,7 @@ func main() {
 	loaderURL := flag.String("hot-to-cold-loader.url", getenv("HOT_TO_COLD_LOADER_URL", ""), "managed hot to cold loader coordination URL")
 	loaderToken := flag.String("hot-to-cold-loader.reader-token", getenv("HOT_TO_COLD_LOADER_READER_TOKEN", ""), "managed read coordination token")
 	loaderOwner := flag.String("hot-to-cold-loader.reader-owner", getenv("HOT_TO_COLD_LOADER_READER_OWNER", ""), "unique managed reader owner (pod UID)")
-	pelicanKey := flag.String("pelican.key", getenv("PELICAN_KEY_PATH", ""), "PEM key that signs SciTokens for the cold warehouse")
+	pelicanKey := flag.String("pelican.key", getenv("PELICAN_KEY_PATH", ""), "PEM key that signs SciTokens for the cold lakehouse")
 	rabbitmqURL := flag.String("rabbitmq.url", getenv("RABBITMQ_URL", ""), "rabbitmq url")
 	streamHeartbeatDuration := flag.Duration("stream.heartbeat-duration", mustParseDuration(getenv("STREAM_HEARTBEAT_DURATION", "15s")), "stream heartbeat duration")
 	flag.Parse()
@@ -56,7 +56,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	frontier, err := tiered.ParseFrontier(tiered.FrontierOptions{Mode: *coldFrontier, Warehouse: *coldWarehouse, Border: *coldBorder, URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner, Bucket: *influxdbBucket})
+	frontier, err := tiered.ParseFrontier(tiered.FrontierOptions{Mode: *coldFrontier, Lakehouse: *coldLakehouse, Border: *coldBorder, URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner, Bucket: *influxdbBucket})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,18 +74,18 @@ func main() {
 		Bucket: *influxdbBucket,
 	}
 
-	// The tiered backend is opt-in. With COLD_WAREHOUSE unset the service
+	// The tiered backend is opt-in. With COLD_LAKEHOUSE unset the service
 	// behaves exactly as it always has, so the single-tier path stays the
 	// default and its tests keep covering what ships by default.
-	if *coldWarehouse != "" {
+	if *coldLakehouse != "" {
 		if *pelicanKey == "" {
-			log.Fatal("cold.warehouse requires pelican.key")
+			log.Fatal("cold.lakehouse requires pelican.key")
 		}
 		ioSettings, err := cold.ParseIOSettings(*coldAsyncThreads, *coldReadAhead)
 		if err != nil {
 			log.Fatal(err)
 		}
-		coldBackend, err := cold.NewBackend(*coldWarehouse, *pelicanKey, ioSettings, tableIdentity)
+		coldBackend, err := cold.NewBackend(*coldLakehouse, *pelicanKey, ioSettings, tableIdentity)
 		if err != nil {
 			log.Fatalf("cold backend: %s", err)
 		}
@@ -105,12 +105,12 @@ func main() {
 			log.Printf("cold query profiling enabled in %s", coldBackend.ProfileDir)
 		}
 		if frontier.Mode == "static" {
-			log.Printf("tiered backend: duckdb iceberg_scan on %s, border %s", *coldWarehouse, frontier.Border.Format(time.RFC3339Nano))
+			log.Printf("tiered backend: duckdb iceberg_scan on %s, border %s", *coldLakehouse, frontier.Border.Format(time.RFC3339Nano))
 		}
 		tieredBackend := &tiered.Backend{Hot: backend, Cold: coldBackend, Border: frontier.Border, TieredStagingDir: *tieredStagingDir, TieredMaxStagingBytes: stagingByteBudget}
 		if frontier.Mode == "dynamic" {
 			tieredBackend.Coordinator = &tiered.Coordinator{Table: tableIdentity, URL: *loaderURL, Token: *loaderToken, Owner: *loaderOwner,
-				Bucket: *influxdbBucket, Warehouse: *coldWarehouse, ObserveRenewal: httpapi.ObserveReadRenewal}
+				Bucket: *influxdbBucket, Lakehouse: *coldLakehouse, ObserveRenewal: httpapi.ObserveReadRenewal}
 			log.Printf("dynamic tiered routing enabled; table=%s.%s; frontier and snapshot pinned per request", tableIdentity.Namespace(), tableIdentity.Name())
 		}
 		backend = tieredBackend
@@ -118,7 +118,7 @@ func main() {
 
 	// create query service
 	metricFrontier := frontier.Mode
-	if *coldWarehouse == "" {
+	if *coldLakehouse == "" {
 		metricFrontier = "hot"
 	}
 	httpapi.ConfigureMetrics(metricFrontier, string(compression))

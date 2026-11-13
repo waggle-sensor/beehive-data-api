@@ -1,4 +1,4 @@
-// Package stage writes request-private aggregate input, not warehouse files.
+// Package stage writes request-private aggregate input, not lakehouse files.
 package stage
 
 import (

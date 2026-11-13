@@ -51,7 +51,7 @@ func (r *dynamicNative) Close() error { r.reader.Release(); return r.Results.Clo
 // Exercise the real HTTP encoders around a managed grant, including the native
 // Arrow capability that must survive the lifetime/ownership wrapper.
 func TestDynamicTieredHTTPFormatsPinViewAndReleaseAfterClose(t *testing.T) {
-	warehouse := "https://origin/sage/cold-storage-archive-test/warehouse"
+	lakehouse := "https://origin/sage/cold-storage-archive-test/lakehouse"
 	stamp := time.Unix(0, 1740787200000000194).UTC()
 	record := &model.Record{Timestamp: stamp, Name: "count", Value: int64(9007199254740993), Meta: map[string]string{"node": "n1"}}
 	var selected string
@@ -67,8 +67,8 @@ func TestDynamicTieredHTTPFormatsPinViewAndReleaseAfterClose(t *testing.T) {
 		if strings.HasSuffix(req.URL.Path, "acquire") {
 			acquired++
 			frontier = time.Date(2025, 3, 1+acquired, 0, 0, 0, 0, time.UTC)
-			selected = warehouse + "/sage/observations/metadata/head-" + frontier.Format("20060102") + ".metadata.json"
-			payload, _ = json.Marshal(tiered.View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Warehouse: warehouse, Metadata: selected, Frontier: frontier.Format(time.RFC3339Nano), CoverageStart: "2025-03-01T00:00:00Z"})
+			selected = lakehouse + "/sage/observations/metadata/head-" + frontier.Format("20060102") + ".metadata.json"
+			payload, _ = json.Marshal(tiered.View{ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano), ID: body["id"], Lakehouse: lakehouse, Metadata: selected, Frontier: frontier.Format(time.RFC3339Nano), CoverageStart: "2025-03-01T00:00:00Z"})
 		} else {
 			if active == nil || !active.Closed {
 				t.Fatal("released read grant before result resources closed")
@@ -95,7 +95,7 @@ func TestDynamicTieredHTTPFormatsPinViewAndReleaseAfterClose(t *testing.T) {
 	backend := &tiered.Backend{Cold: reader, Hot: dynamicInner(func(context.Context, *model.Query) (model.Results, error) {
 		t.Fatal("cold request routed to hot tier")
 		return nil, nil
-	}), Coordinator: &tiered.Coordinator{URL: "https://coordinator", Token: "reader", Owner: "api-pod", Bucket: "waggle", Warehouse: warehouse, Client: client}}
+	}), Coordinator: &tiered.Coordinator{URL: "https://coordinator", Token: "reader", Owner: "api-pod", Bucket: "waggle", Lakehouse: lakehouse, Client: client}}
 	service := NewService(&ServiceConfig{Backend: backend})
 	for _, format := range []string{arrowio.MIME, "application/x-ndjson"} {
 		req := httptest.NewRequest("POST", "/api/v1/query", strings.NewReader(`{"start":"2025-03-01T00:00:00Z","end":"2025-03-01T01:00:00Z"}`))

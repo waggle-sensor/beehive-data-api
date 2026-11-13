@@ -14,7 +14,7 @@ Flags normally override environment defaults. An explicitly set empty environmen
 | `-influxdb.token` | `INFLUXDB_TOKEN` | empty | Influx API token |
 | `-influxdb.bucket` | `INFLUXDB_BUCKET` | empty | Default hot bucket; static requests can override it; dynamic requests must match it |
 | `-influxdb.timeout` | `INFLUXDB_TIMEOUT` | `15m` | Influx HTTP client duration; invalid syntax fails parsing |
-| `-cold.warehouse` | `COLD_WAREHOUSE` | empty | Warehouse base URL; nonempty enables tiered routing |
+| `-cold.lakehouse` | `COLD_LAKEHOUSE` | empty | Lakehouse base URL; nonempty enables tiered routing |
 | `-cold.namespace` | `COLD_NAMESPACE` | `sage` | Iceberg namespace; ASCII identifier |
 | `-cold.table-name` | `COLD_TABLE_NAME` | `observations` | Iceberg table name; ASCII identifier |
 | `-cold.async-threads` | `COLD_ASYNC_THREADS` | `8` | Integer from 1 through 256; checked when cold is enabled |
@@ -23,31 +23,31 @@ Flags normally override environment defaults. An explicitly set empty environmen
 | `-tiered.max-staging-bytes` | `TIERED_MAX_STAGING_BYTES` | `17179869184` (16 GiB) | Positive uncompressed JSON-equivalent hot-input byte limit per aggregation request |
 | `-cold.profile-dir` | `COLD_PROFILE_DIR` | empty | Local profile parent directory; empty disables profiling |
 | `-cold.frontier` | `COLD_FRONTIER` | `static` | `dynamic` or `static`; trims whitespace and is case-insensitive; invalid/empty values fail startup |
-| `-cold.border` | `COLD_BORDER` | empty | Required with a warehouse in static mode; RFC3339 boundary, including fractional seconds; must be unset in dynamic mode |
+| `-cold.border` | `COLD_BORDER` | empty | Required with a lakehouse in static mode; RFC3339 boundary, including fractional seconds; must be unset in dynamic mode |
 | `-hot-to-cold-loader.url` | `HOT_TO_COLD_LOADER_URL` | empty | Required in dynamic mode; unset in static mode |
 | `-hot-to-cold-loader.reader-token` | `HOT_TO_COLD_LOADER_READER_TOKEN` | empty | Reader-role coordination credential; required in dynamic mode, unset in static mode |
 | `-hot-to-cold-loader.reader-owner` | `HOT_TO_COLD_LOADER_READER_OWNER` | empty | Dynamic reader owner prefix; use pod UID; a process UUID is appended automatically |
-| `-pelican.key` | `PELICAN_KEY_PATH` | empty | Required with a warehouse; readable PEM EC signing key |
+| `-pelican.key` | `PELICAN_KEY_PATH` | empty | Required with a lakehouse; readable PEM EC signing key |
 | `-rabbitmq.url` | `RABBITMQ_URL` | empty | RabbitMQ URL used by the live SSE endpoint |
 | `-stream.heartbeat-duration` | `STREAM_HEARTBEAT_DURATION` | `15s` | SSE idle heartbeat duration; use a positive duration |
 
 Go duration examples include `15s`, `2m`, and `15m`. The heartbeat is not validated as positive at startup; a nonpositive value is invalid when the stream handler creates its ticker.
 
-The Influx organization is fixed to `waggle`; there is no organization flag. There is no environment variable for `-addr`. The process can start without usable hot credentials or RabbitMQ connectivity; those operations can fail when requested. Enabling cold storage additionally opens DuckDB, loads extensions, validates the warehouse scope/key and checks the engine version at startup. It does not prove every remote data object is accessible.
+The Influx organization is fixed to `waggle`; there is no organization flag. There is no environment variable for `-addr`. The process can start without usable hot credentials or RabbitMQ connectivity; those operations can fail when requested. Enabling cold storage additionally opens DuckDB, loads extensions, validates the lakehouse scope/key and checks the engine version at startup. It does not prove every remote data object is accessible.
 
 ## Cold routing and credentials
 
 The border separates two half-open ranges: cold before the boundary and hot at or after it. In static mode no automatic border discovery or retention validation occurs. Operators must ensure the selected hot/cold stores have the intended coverage; the router does not deduplicate overlapping archives or fill gaps.
 
 The reader expects table metadata beneath
-`<COLD_WAREHOUSE>/<COLD_NAMESPACE>/<COLD_TABLE_NAME>/metadata/`;
-with defaults this is `<COLD_WAREHOUSE>/sage/observations/metadata/`.
+`<COLD_LAKEHOUSE>/<COLD_NAMESPACE>/<COLD_TABLE_NAME>/metadata/`;
+with defaults this is `<COLD_LAKEHOUSE>/sage/observations/metadata/`.
 Both static hint lookup and dynamic coordinator validation use this path.
 Set the namespace and table name to the same values as the hot-to-cold loader.
 Identifiers must start with an ASCII letter or underscore and contain only
 ASCII letters, digits, or underscores; empty values and path syntax are
 rejected. Changing these settings selects another table; it does not rename
-or migrate one. The signing scope remains derived from the warehouse prefix. See the [storage contract](architecture.md#cold-storage-contract).
+or migrate one. The signing scope remains derived from the lakehouse prefix. See the [storage contract](architecture.md#cold-storage-contract).
 
 The configured PEM must correspond to a key trusted by Pelican. The current signer uses fixed issuer `https://sagecontinuum.org`, key ID `3cfa`, ES256, and a scoped read token. These are not configurable startup flags. Keep real tokens and private keys out of example files and images.
 
@@ -79,18 +79,18 @@ Source of truth: [startup options](../main.go), [frontier validation](../interna
 | Behavior | `static` (default) | `dynamic` |
 | --- | --- | --- |
 | Boundary source | Operator-configured `COLD_BORDER` | Verified frontier returned by the hot-to-cold loader per query |
-| Cold snapshot | Resolve the warehouse's metadata hint per query | Pin the exact snapshot returned with the read grant |
+| Cold snapshot | Resolve the lakehouse's metadata hint per query | Pin the exact snapshot returned with the read grant |
 | Read coordination | No reader lease | Renewable reader lease held through query setup/streaming |
 | Loader settings | Must be unset | URL, reader token and reader owner required |
-| Appropriate use | Fixed demo/validation warehouses with operator-managed coverage | Continuous archival and coordinated Influx deletion |
+| Appropriate use | Fixed demo/validation lakehouses with operator-managed coverage | Continuous archival and coordinated Influx deletion |
 
-Both modes read cold data before the boundary and hot data at or after it. They preserve the same public query and response schema. With no warehouse configured, the default static mode remains hot-only; leave `COLD_BORDER` unset too.
+Both modes read cold data before the boundary and hot data at or after it. They preserve the same public query and response schema. With no lakehouse configured, the default static mode remains hot-only; leave `COLD_BORDER` unset too.
 
 Static example (plus normal Influx configuration):
 
 ```sh
 export COLD_FRONTIER=static
-export COLD_WAREHOUSE='https://storage.example.org/sage/example-isolated-prefix/warehouse'
+export COLD_LAKEHOUSE='https://storage.example.org/sage/example-isolated-prefix/lakehouse'
 export COLD_BORDER='2025-05-01T00:00:00Z'
 export PELICAN_KEY_PATH='/path/to/trusted-signing-key.pem'
 ```
@@ -100,7 +100,7 @@ Dynamic example (reader token supplied through deployment secrets):
 ```sh
 export COLD_FRONTIER=dynamic
 unset COLD_BORDER
-export COLD_WAREHOUSE='https://storage.example.org/sage/example-managed-prefix/warehouse'
+export COLD_LAKEHOUSE='https://storage.example.org/sage/example-managed-prefix/lakehouse'
 export HOT_TO_COLD_LOADER_URL='http://beehive-hot-to-cold-loader:10001'
 export HOT_TO_COLD_LOADER_READER_OWNER='api-pod-uid'
 export INFLUXDB_BUCKET='waggle'
@@ -132,4 +132,4 @@ The Parquet file stays until the native result closes. A failed or canceled requ
 
 Cold-only aggregates read Iceberg directly and write no hot staging files. Ordinary extracts keep their existing execution path.
 
-A table marked `sage.value.encoding=variant-uint64-decimal-v1` stores selected uint64 values as reserved zero-scale decimals. Aggregates restore those values to uint64 after checking that each one falls in range, and leave every other kind as stored. The API reads the marker from the pinned snapshot and remembers only the latest snapshot it has inspected. Any other marker fails the aggregate. An unmarked table keeps each value's stored kind, so a decimal becomes uint64 only when this marker names it. Ordinary extracts still return the stored value. Follow the loader's warehouse policy before publishing encoded data.
+A table marked `sage.value.encoding=variant-uint64-decimal-v1` stores selected uint64 values as reserved zero-scale decimals. Aggregates restore those values to uint64 after checking that each one falls in range, and leave every other kind as stored. The API reads the marker from the pinned snapshot and remembers only the latest snapshot it has inspected. Any other marker fails the aggregate. An unmarked table keeps each value's stored kind, so a decimal becomes uint64 only when this marker names it. Ordinary extracts still return the stored value. Follow the loader's lakehouse policy before publishing encoded data.

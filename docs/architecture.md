@@ -49,7 +49,7 @@ flowchart TD
     Intent --> Call["backend.Query"]
     Plain --> Call
 
-    Call --> Mode{"Cold warehouse configured?"}
+    Call --> Mode{"Cold lakehouse configured?"}
     Mode -->|no| Hot["Hot backend"]
     Mode -->|yes| Frontier{"COLD_FRONTIER"}
     Frontier -->|static| Static["Use configured COLD_BORDER"]
@@ -94,9 +94,9 @@ flowchart TD
     NDJSON --> Close
 ```
 
-The query handler validates the JSON request and records Arrow intent in the request context when `Accept` selects Arrow. It calls the configured backend before choosing the response writer. Hot-only operation uses Influx directly; setting a cold warehouse wraps both stores in the tiered router.
+The query handler validates the JSON request and records Arrow intent in the request context when `Accept` selects Arrow. It calls the configured backend before choosing the response writer. Hot-only operation uses Influx directly; setting a cold lakehouse wraps both stores in the tiered router.
 
-The router resolves a relative start or end once, in UTC, against its own clock, using Flux duration units. It then sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Standalone crossing head/tail requests stage raw hot input and select observations once per canonical series over the combined ranges. The tiered backend stages raw hot input and plans one DuckDB aggregate over cold plus hot rows for crossing aggregates; combined limits are applied per series before aggregation. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, warehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
+The router resolves a relative start or end once, in UTC, against its own clock, using Flux duration units. It then sends ranges ending at or before the border to cold storage, and ranges starting at or after it to hot storage. Ordinary crossing requests are split at the exact nanosecond boundary, with cold results emitted first. Standalone crossing head/tail requests stage raw hot input and select observations once per canonical series over the combined ranges. The tiered backend stages raw hot input and plans one DuckDB aggregate over cold plus hot rows for crossing aggregates; combined limits are applied per series before aggregation. Static routing trusts operator-configured coverage. Dynamic routing also checks the coordinator's coverage start, lakehouse and pinned metadata URL. The API reads Influx/Pelican directly; coordination does not proxy query results.
 
 The hot backend generates Flux, reads records through the Influx SDK, and extracts measurement values and tags. The HTTP encoder converts those records to NDJSON or batches of up to 65,536 rows for Arrow. Hot iteration order comes from Flux, including its table grouping.
 
@@ -131,9 +131,9 @@ Promoted tags are merged into public metadata with the existing collision preced
 
 Marked tables set `sage.value.encoding` to `variant-uint64-decimal-v1`. Aggregates then restore those reserved zero-scale decimal VARIANT values to uint64 after range validation. Unmarked tables keep the stored kind, and an unsupported marker fails the aggregate. Ordinary extracts still serialize the stored value directly.
 
-For the deployed URL layout, the warehouse base is `https://<host>/sage/cold/lakehouse`. The API reads `<base>/<namespace>/<table-name>/metadata/version-hint.text` in static mode, validates the metadata stem and opens `<base>/<namespace>/<table-name>/metadata/<stem>.metadata.json`. Dynamic mode validates and opens the coordinator's pinned metadata URL instead. Referenced metadata, manifests and data objects must remain accessible. The API is a reader; it does not publish snapshots or write warehouse files.
+For the deployed URL layout, the lakehouse base is `https://<host>/sage/cold/lakehouse`. The API reads `<base>/<namespace>/<table-name>/metadata/version-hint.text` in static mode, validates the metadata stem and opens `<base>/<namespace>/<table-name>/metadata/<stem>.metadata.json`. Dynamic mode validates and opens the coordinator's pinned metadata URL instead. Referenced metadata, manifests and data objects must remain accessible. The API is a reader; it does not publish snapshots or write lakehouse files.
 
-The adopted writer policy uses day partitions, chronological file batches of at most 10 million rows, rows sorted by plugin then vsn then time within a file, and plugin-pure row groups capped at 262,144 rows. Large plugins span multiple groups; small plugins can share files. This is warehouse writer policy, not a geometry constraint validated by the API on each request.
+The adopted writer policy uses day partitions, chronological file batches of at most 10 million rows, rows sorted by plugin then vsn then time within a file, and plugin-pure row groups capped at 262,144 rows. Large plugins span multiple groups; small plugins can share files. This is lakehouse writer policy, not a geometry constraint validated by the API on each request.
 
 ## Dynamic archival integration
 

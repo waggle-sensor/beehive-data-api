@@ -435,13 +435,13 @@ func TestTieredClosesColdWhenHotFailsToStart(t *testing.T) {
 }
 
 func TestColdFrontierConfiguration(t *testing.T) {
-	dynamic := FrontierOptions{Mode: "dynamic", Warehouse: "warehouse", URL: "http://loader", Token: "secret", Owner: "api", Bucket: "waggle"}
-	for _, field := range []string{"warehouse", "url", "token", "owner", "bucket", "border"} {
+	dynamic := FrontierOptions{Mode: "dynamic", Lakehouse: "lakehouse", URL: "http://loader", Token: "secret", Owner: "api", Bucket: "waggle"}
+	for _, field := range []string{"lakehouse", "url", "token", "owner", "bucket", "border"} {
 		t.Run("dynamic/"+field, func(t *testing.T) {
 			o := dynamic
 			switch field {
-			case "warehouse":
-				o.Warehouse = ""
+			case "lakehouse":
+				o.Lakehouse = ""
 			case "url":
 				o.URL = ""
 			case "token":
@@ -462,7 +462,7 @@ func TestColdFrontierConfiguration(t *testing.T) {
 		t.Fatal(c, err)
 	}
 	border := "2025-05-01T00:00:00.000000194Z"
-	c, err := ParseFrontier(FrontierOptions{Mode: "static", Warehouse: "warehouse", Border: border})
+	c, err := ParseFrontier(FrontierOptions{Mode: "static", Lakehouse: "lakehouse", Border: border})
 	if err != nil || c.Border.Format(time.RFC3339Nano) != border {
 		t.Fatal(c, err)
 	}
@@ -470,8 +470,8 @@ func TestColdFrontierConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, o := range []FrontierOptions{
-		{Mode: ""}, {Mode: "auto"}, {Mode: "static", Warehouse: "warehouse"},
-		{Mode: "static", Warehouse: "warehouse", Border: "invalid"}, {Mode: "static", Border: border},
+		{Mode: ""}, {Mode: "auto"}, {Mode: "static", Lakehouse: "lakehouse"},
+		{Mode: "static", Lakehouse: "lakehouse", Border: "invalid"}, {Mode: "static", Border: border},
 		{Mode: "static", URL: "loader"}, {Mode: "static", Token: "secret"}, {Mode: "static", Owner: "api"},
 	} {
 		if _, err := ParseFrontier(o); err == nil {

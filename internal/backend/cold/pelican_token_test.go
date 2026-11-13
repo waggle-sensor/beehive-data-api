@@ -1,5 +1,5 @@
 // pelican_token_test.go checks the signed claims and the read scope derived
-// from the warehouse URL.
+// from the lakehouse URL.
 
 package cold
 
@@ -69,7 +69,7 @@ func TestMintSciTokenClaims(t *testing.T) {
 
 // TestReadScope tests the read scope.
 func TestReadScope(t *testing.T) {
-	got, err := readScope("https://nrdstor.example:8443/sage/cold-storage-demo-1/warehouse")
+	got, err := readScope("https://nrdstor.example:8443/sage/cold-storage-demo-1/lakehouse")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,6 @@ func TestReadScope(t *testing.T) {
 		t.Fatalf("scope %q", got)
 	}
 	if _, err := readScope("https://nrdstor.example:8443/sage"); err == nil {
-		t.Fatal("warehouse without a prefix was accepted")
+		t.Fatal("lakehouse without a prefix was accepted")
 	}
 }

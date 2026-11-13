@@ -16,7 +16,7 @@ export INFLUXDB_BUCKET='your-bucket'
 ./beehive-data-api -addr=:10000
 ```
 
-The Influx organization is `waggle`. Use `COLD_FRONTIER=static` (the default) and leave `COLD_WAREHOUSE`, `COLD_BORDER` and the three `HOT_TO_COLD_LOADER_*` connection settings unset for a hot-only service. A missing coordinator URL in dynamic mode is a startup error, not an Influx-only fallback. RabbitMQ is needed only for the live SSE route, not stored queries. Set `RABBITMQ_URL` to your broker URL to enable successful stream requests. No separate health-check endpoint is implemented; `/` is a redirect, and a successful metrics response alone does not prove storage availability.
+The Influx organization is `waggle`. Use `COLD_FRONTIER=static` (the default) and leave `COLD_LAKEHOUSE`, `COLD_BORDER` and the three `HOT_TO_COLD_LOADER_*` connection settings unset for a hot-only service. A missing coordinator URL in dynamic mode is a startup error, not an Influx-only fallback. RabbitMQ is needed only for the live SSE route, not stored queries. Set `RABBITMQ_URL` to your broker URL to enable successful stream requests. No separate health-check endpoint is implemented; `/` is a redirect, and a successful metrics response alone does not prove storage availability.
 
 Use a known small absolute-bound query from the [API guide](api.md) to check storage access and decode the actual response format. Do not use an entire month as a startup health check.
 
@@ -34,10 +34,10 @@ Export these environment values before running the container. A container's `loc
 
 ## Static cold frontier
 
-Point the API at an already-published Iceberg v3 warehouse. These values are illustrative; substitute the warehouse and border validated for your stores.
+Point the API at an already-published Iceberg v3 lakehouse. These values are illustrative; substitute the lakehouse and border validated for your stores.
 
 ```sh
-export COLD_WAREHOUSE='https://storage.example.org/sage/example-isolated-prefix/warehouse'
+export COLD_LAKEHOUSE='https://storage.example.org/sage/example-isolated-prefix/lakehouse'
 export COLD_FRONTIER='static'
 export COLD_BORDER='2025-05-01T00:00:00Z'
 export PELICAN_KEY_PATH='/path/to/trusted-signing-key.pem'
@@ -53,18 +53,18 @@ The key must be an EC private key accepted by the configured Pelican trust setup
 
 At startup the cold backend checks the key/scope, opens DuckDB, installs/loads `httpfs` and `iceberg`, and verifies the linked engine is 2.0.x. Extension installation needs download access unless cached. Actual hint, manifest and object reads happen during queries.
 
-Coordinate the border with hot retention and published cold coverage. The API does not detect missing days or verify that hot data exists beyond the boundary. The warehouse must satisfy the [reader contract](architecture.md#cold-storage-contract); old split-value warehouses are not upgraded by changing the URL.
+Coordinate the border with hot retention and published cold coverage. The API does not detect missing days or verify that hot data exists beyond the boundary. The lakehouse must satisfy the [reader contract](architecture.md#cold-storage-contract); old split-value lakehouses are not upgraded by changing the URL.
 
-The API has read-only warehouse behavior. Publishing or testing writers belongs in a separate, fresh isolated prefix. Never use `/node-data` for experiments. Do not repoint a running service merely to follow a documentation example.
+The API has read-only lakehouse behavior. Publishing or testing writers belongs in a separate, fresh isolated prefix. Never use `/node-data` for experiments. Do not repoint a running service merely to follow a documentation example.
 
 ## Dynamic cold frontier
 
-For continuous archival, configure the same bucket and warehouse as `beehive-hot-to-cold-loader`. The API reads data directly from Influx and Pelican; the loader supplies the routing view and read-lease coordination.
+For continuous archival, configure the same bucket and lakehouse as `beehive-hot-to-cold-loader`. The API reads data directly from Influx and Pelican; the loader supplies the routing view and read-lease coordination.
 
 ```sh
 export COLD_FRONTIER='dynamic'
 unset COLD_BORDER
-export COLD_WAREHOUSE='https://storage.example.org/sage/example-managed-prefix/warehouse'
+export COLD_LAKEHOUSE='https://storage.example.org/sage/example-managed-prefix/lakehouse'
 export HOT_TO_COLD_LOADER_URL='http://beehive-hot-to-cold-loader:10001'
 export HOT_TO_COLD_LOADER_READER_OWNER='api-pod-uid'
 export INFLUXDB_BUCKET='waggle'
@@ -100,7 +100,7 @@ export COLD_PROFILE_DIR='/tmp/beehive-cold-profiles'
 
 Profiling is off when the setting is empty. Each startup creates a private `session-*` directory. Each cold Arrow request gets a `.duckdb.json` operator profile and `.timing.json` sidecar. A container needs a writable mounted profile directory if files should survive recreation. Copy profiles out before replacing a container.
 
-Credential setup precedes native profiling. Profiles can contain query SQL, warehouse URLs and local paths, so treat the files as operational data. Profiling does not change the response schema and does not profile the NDJSON path. A per-query profile-creation failure is logged; that request can proceed without a profile.
+Credential setup precedes native profiling. Profiles can contain query SQL, lakehouse URLs and local paths, so treat the files as operational data. Profiling does not change the response schema and does not profile the NDJSON path. A per-query profile-creation failure is logged; that request can proceed without a profile.
 
 Sidecars record engine version, rows/batches, phase timings, whether the native profile is present, and status: `complete`, `failed`, `cancelled`, or `incomplete`. Use complete profiles for performance analysis. Setup, first batch and EOF timestamps overlap; operator work overlaps across workers and can include waits. Do not add these numbers together or interpret engine byte counters as direct Pelican network traffic. On DuckDB 2.0, execution can block inside the first fetch after a native result has already been returned.
 
@@ -121,12 +121,12 @@ Dynamic query logs also identify the reader owner, unresolved acquires and renew
 | Missing `arrowmapping` or Arrow symbols while building | Use `CGO_ENABLED=1` and `-tags=duckdb_arrow` for build, tests and vet |
 | `GLIBC_* not found` | Use the matched Bookworm builder/runtime in the Dockerfile |
 | Cold startup fails | Valid frontier mode; static border or complete dynamic connection settings; readable EC PEM, supported engine, extension-download access |
-| Dynamic configuration rejected | Set `COLD_FRONTIER=dynamic`, warehouse, bucket, URL, reader token and owner; unset `COLD_BORDER` |
-| Static configuration rejected | Unset loader connection settings; set a valid border with a nonempty warehouse, or clear both for hot-only operation |
-| Dynamic query fails before data | Coordinator reachability/reader token, matching bucket/warehouse, coverage start and metadata URL |
+| Dynamic configuration rejected | Set `COLD_FRONTIER=dynamic`, lakehouse, bucket, URL, reader token and owner; unset `COLD_BORDER` |
+| Static configuration rejected | Unset loader connection settings; set a valid border with a nonempty lakehouse, or clear both for hot-only operation |
+| Dynamic query fails before data | Coordinator reachability/reader token, matching bucket/lakehouse, coverage start and metadata URL |
 | Query canceled after renewal errors | Coordinator connectivity/journal health and synchronized clocks; retry the complete query with a fresh request |
 | Old reader remains in coordinator state | Check its expiry and grace; expired rows may remain for diagnosis without blocking deletion |
-| Hint or object read fails | Warehouse URL layout, published hint, rebased manifest references, scope/trusted key and network reachability |
+| Hint or object read fails | lakehouse URL layout, published hint, rebased manifest references, scope/trusted key and network reachability |
 | No first batch on a long query | Complete query profile; scan/sort can block before streaming begins |
 | Container exits 137 or is OOM-killed | Container limit/other processes and cgroup counters; DuckDB's 3 GB is not a total-process limit |
 | NDJSON finishes with too few rows | Check server errors and independent expected counts; HTTP 200 is insufficient |

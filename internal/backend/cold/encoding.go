@@ -13,7 +13,7 @@ import (
 )
 
 // ValidateSourceBucket rejects an override that names a different bucket.
-// Cold storage has one warehouse, so the override must match the configured hot bucket.
+// Cold storage has one lakehouse, so the override must match the configured hot bucket.
 func (backend *Backend) ValidateSourceBucket(query *model.Query) error {
 	if query.Bucket != nil && (backend.SourceBucket == "" || *query.Bucket != backend.SourceBucket) {
 		return fmt.Errorf("cold query does not cover requested bucket")

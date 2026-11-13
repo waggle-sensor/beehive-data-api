@@ -78,15 +78,15 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 	if err = json.Unmarshal(raw, &inputs); err != nil {
 		t.Fatal(err)
 	}
-	// Serve immutable metadata under the production /sage/<scope>/warehouse
+	// Serve immutable metadata under the production /sage/<scope>/lakehouse
 	// URL shape. Manifest/data references remain private local fixture files.
 	raw, err = os.ReadFile(strings.TrimPrefix(manifest.Metadata, "file://"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	metadataBytes := append([]byte(nil), raw...)
-	warehousePath := "/sage/aggregation-parity/warehouse"
-	metadataPath := warehousePath + "/sage/observations/metadata/" + filepath.Base(manifest.Metadata)
+	lakehousePath := "/sage/aggregation-parity/lakehouse"
+	metadataPath := lakehousePath + "/sage/observations/metadata/" + filepath.Base(manifest.Metadata)
 	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != metadataPath {
 			http.NotFound(w, r)
@@ -109,7 +109,7 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 	if err = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	backend, err := NewBackend(storage.URL+warehousePath, keyPath, defaultColdIOSettings(), model.TableIdentity{})
+	backend, err := NewBackend(storage.URL+lakehousePath, keyPath, defaultColdIOSettings(), model.TableIdentity{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 				}
 				router := &tiered.Backend{Hot: hotBackend, Cold: backend, Border: border, TieredStagingDir: stageDir}
 				releases := 0
-				router.Coordinator = &tiered.Coordinator{URL: "https://coord.fixture", Token: "fixture", Bucket: bucket, Owner: "aggregation-test", Warehouse: backend.Warehouse,
+				router.Coordinator = &tiered.Coordinator{URL: "https://coord.fixture", Token: "fixture", Bucket: bucket, Owner: "aggregation-test", Lakehouse: backend.Lakehouse,
 					Client: &http.Client{Transport: aggregationFixtureTransport(func(req *http.Request) (*http.Response, error) {
 						var request map[string]string
 						if e := json.NewDecoder(req.Body).Decode(&request); e != nil {
@@ -281,7 +281,7 @@ func runAggregationProductionHTTP(t *testing.T, live, selection bool) {
 						var payload any = map[string]bool{"ok": true}
 						switch req.URL.Path {
 						case "/v1/reads/acquire", "/v1/reads/renew":
-							payload = tiered.View{ID: request["id"], Warehouse: backend.Warehouse, Metadata: metadata, Frontier: tc.Border, CoverageStart: "1678-01-01T00:00:00Z", Generation: 1, ExpiresAt: time.Now().Add(30 * time.Minute).Format(time.RFC3339Nano)}
+							payload = tiered.View{ID: request["id"], Lakehouse: backend.Lakehouse, Metadata: metadata, Frontier: tc.Border, CoverageStart: "1678-01-01T00:00:00Z", Generation: 1, ExpiresAt: time.Now().Add(30 * time.Minute).Format(time.RFC3339Nano)}
 						case "/v1/reads/release":
 							if !backend.mu.TryLock() {
 								return nil, fmt.Errorf("grant released before native result unlocked")

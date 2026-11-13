@@ -27,7 +27,7 @@ import (
 type View struct {
 	ExpiresAt     string `json:"expires_at"`
 	ID            string `json:"id"`
-	Warehouse     string `json:"warehouse"`
+	Lakehouse     string `json:"lakehouse"`
 	Metadata      string `json:"metadata"`
 	Frontier      string `json:"frontier"`
 	CoverageStart string `json:"coverage_start"`
@@ -39,7 +39,7 @@ type Coordinator struct {
 	Table model.TableIdentity
 	// ObserveRenewal is optional and does not participate in lease decisions.
 	ObserveRenewal                       func(outcome string, seconds float64)
-	URL, Token, Bucket, Owner, Warehouse string
+	URL, Token, Bucket, Owner, Lakehouse string
 	Client                               *http.Client
 	ownerOnce                            sync.Once
 	sessionOwner                         string
@@ -119,8 +119,8 @@ func (coordinator *Coordinator) query(ctx context.Context, query *model.Query, r
 		return nil, err
 	}
 	fail := func(err error) (model.Results, error) { return nil, errors.Join(err, coordinator.release(requestID)) }
-	if view.ID != requestID || view.Warehouse != coordinator.Warehouse {
-		return fail(errors.New("managed warehouse/read identity mismatch"))
+	if view.ID != requestID || view.Lakehouse != coordinator.Lakehouse {
+		return fail(errors.New("managed lakehouse/read identity mismatch"))
 	}
 	frontier, err := time.Parse(time.RFC3339Nano, view.Frontier)
 	if err != nil {
@@ -142,8 +142,8 @@ func (coordinator *Coordinator) query(ctx context.Context, query *model.Query, r
 	}
 	if start.Before(frontier) {
 		metadataURL, err := url.Parse(view.Metadata)
-		warehouseURL, warehouseErr := url.Parse(coordinator.Warehouse)
-		if err != nil || warehouseErr != nil || view.Metadata == "" || metadataURL.Scheme != warehouseURL.Scheme || metadataURL.Host != warehouseURL.Host || metadataURL.RawQuery != "" || metadataURL.Fragment != "" || metadataURL.RawPath != "" || metadataURL.User != nil || !strings.HasPrefix(metadataURL.Path, coordinator.Table.Location(warehouseURL.Path)+"/metadata/") || strings.Contains(metadataURL.Path, "..") || !strings.HasSuffix(metadataURL.Path, ".metadata.json") {
+		lakehouseURL, lakehouseErr := url.Parse(coordinator.Lakehouse)
+		if err != nil || lakehouseErr != nil || view.Metadata == "" || metadataURL.Scheme != lakehouseURL.Scheme || metadataURL.Host != lakehouseURL.Host || metadataURL.RawQuery != "" || metadataURL.Fragment != "" || metadataURL.RawPath != "" || metadataURL.User != nil || !strings.HasPrefix(metadataURL.Path, coordinator.Table.Location(lakehouseURL.Path)+"/metadata/") || strings.Contains(metadataURL.Path, "..") || !strings.HasSuffix(metadataURL.Path, ".metadata.json") {
 			return fail(errors.New("invalid managed metadata URL"))
 		}
 	}

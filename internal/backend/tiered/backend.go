@@ -211,7 +211,7 @@ func (r *tieredResults) Parts() []model.Results { return []model.Results{r.first
 
 // FrontierOptions holds startup settings for static or dynamic cold routing.
 type FrontierOptions struct {
-	Mode, Warehouse, Border, URL, Token, Owner, Bucket string
+	Mode, Lakehouse, Border, URL, Token, Owner, Bucket string
 }
 
 // FrontierConfig is the validated frontier mode and optional static boundary.
@@ -227,8 +227,8 @@ func ParseFrontier(options FrontierOptions) (FrontierConfig, error) {
 		return config, fmt.Errorf("cold.frontier must be static or dynamic")
 	}
 	if config.Mode == "dynamic" {
-		if options.Warehouse == "" || options.URL == "" || options.Token == "" || options.Owner == "" || options.Bucket == "" {
-			return config, fmt.Errorf("dynamic cold.frontier requires cold.warehouse, hot-to-cold-loader.url, hot-to-cold-loader.reader-token, hot-to-cold-loader.reader-owner and influxdb.bucket")
+		if options.Lakehouse == "" || options.URL == "" || options.Token == "" || options.Owner == "" || options.Bucket == "" {
+			return config, fmt.Errorf("dynamic cold.frontier requires cold.lakehouse, hot-to-cold-loader.url, hot-to-cold-loader.reader-token, hot-to-cold-loader.reader-owner and influxdb.bucket")
 		}
 		if options.Border != "" {
 			return config, fmt.Errorf("cold.border must be unset with dynamic cold.frontier")
@@ -238,9 +238,9 @@ func ParseFrontier(options FrontierOptions) (FrontierConfig, error) {
 	if options.URL != "" || options.Token != "" || options.Owner != "" {
 		return config, fmt.Errorf("hot-to-cold-loader settings require dynamic cold.frontier")
 	}
-	if options.Warehouse == "" {
+	if options.Lakehouse == "" {
 		if options.Border != "" {
-			return config, fmt.Errorf("cold.border requires cold.warehouse")
+			return config, fmt.Errorf("cold.border requires cold.lakehouse")
 		}
 		return config, nil // Default hot-only deployment.
 	}

@@ -82,7 +82,7 @@ func (coordinator *Coordinator) readLease(parent context.Context, owner string, 
 				continue
 			}
 			next, err := time.Parse(time.RFC3339Nano, renewed.ExpiresAt)
-			if err != nil || renewed.ID != view.ID || renewed.Warehouse != view.Warehouse || renewed.Metadata != view.Metadata || renewed.Frontier != view.Frontier || renewed.CoverageStart != view.CoverageStart || renewed.Generation != view.Generation || next.Before(confirmedExpiry) {
+			if err != nil || renewed.ID != view.ID || renewed.Lakehouse != view.Lakehouse || renewed.Metadata != view.Metadata || renewed.Frontier != view.Frontier || renewed.CoverageStart != view.CoverageStart || renewed.Generation != view.Generation || next.Before(confirmedExpiry) {
 				observe("error")
 				cancel(errors.New("invalid renewed read lease"))
 				return

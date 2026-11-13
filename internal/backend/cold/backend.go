@@ -1,5 +1,5 @@
 // backend.go reads one Iceberg snapshot through DuckDB. The metadata URL is
-// the pinned snapshot when the coordinator set one, otherwise the warehouse hint.
+// the pinned snapshot when the coordinator set one, otherwise the lakehouse hint.
 
 package cold
 
@@ -36,7 +36,7 @@ type Backend struct {
 	coldArrowState
 	DB            *sql.DB
 	connector     *duckdb.Connector
-	Warehouse     string
+	Lakehouse     string
 	KeyPath       string
 	Client        *http.Client
 	ProfileDir    string
@@ -68,12 +68,12 @@ func (backend *Backend) Close() error {
 
 // NewBackend opens DuckDB and loads the httpfs and iceberg extensions.
 // The first call downloads those extensions; later connections only LOAD them.
-func NewBackend(warehouse, keyPath string, settings IOSettings, table model.TableIdentity) (*Backend, error) {
-	warehouse = strings.TrimRight(warehouse, "/")
-	if warehouse == "" {
-		return nil, fmt.Errorf("cold warehouse is empty")
+func NewBackend(lakehouse, keyPath string, settings IOSettings, table model.TableIdentity) (*Backend, error) {
+	lakehouse = strings.TrimRight(lakehouse, "/")
+	if lakehouse == "" {
+		return nil, fmt.Errorf("cold lakehouse is empty")
 	}
-	if _, err := readScope(warehouse); err != nil {
+	if _, err := readScope(lakehouse); err != nil {
 		return nil, err
 	}
 	if _, err := loadPelicanKey(keyPath); err != nil {
@@ -112,7 +112,7 @@ func NewBackend(warehouse, keyPath string, settings IOSettings, table model.Tabl
 		Table:      table,
 		DB:         db,
 		connector:  connector,
-		Warehouse:  warehouse,
+		Lakehouse:  lakehouse,
 		KeyPath:    keyPath,
 		Client:     &http.Client{Timeout: 30 * time.Second},
 		IOSettings: &settings,
@@ -181,7 +181,7 @@ func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUn
 	if err != nil {
 		return nil, err
 	}
-	scope, err := readScope(backend.Warehouse)
+	scope, err := readScope(backend.Lakehouse)
 	if err != nil {
 		return nil, err
 	}
@@ -199,9 +199,9 @@ func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUn
 		if err != nil {
 			return nil, err
 		}
-		metadataURL = fmt.Sprintf("%s/metadata/%s.metadata.json", backend.Table.Location(backend.Warehouse), stem)
+		metadataURL = fmt.Sprintf("%s/metadata/%s.metadata.json", backend.Table.Location(backend.Lakehouse), stem)
 	} else {
-		prefix := backend.Table.Location(backend.Warehouse) + "/metadata/"
+		prefix := backend.Table.Location(backend.Lakehouse) + "/metadata/"
 		if !strings.HasPrefix(metadataURL, prefix) || !strings.HasSuffix(metadataURL, ".metadata.json") ||
 			!validHintStem(strings.TrimSuffix(strings.TrimPrefix(metadataURL, prefix), ".metadata.json")) {
 			return nil, fmt.Errorf("managed metadata is outside the configured table")
@@ -289,7 +289,7 @@ func (backend *Backend) query(ctx context.Context, query *model.Query, restoreUn
 
 // readHint reads the version-hint.text file.
 func (backend *Backend) readHint(ctx context.Context, tok string) (string, error) {
-	hintURL := backend.Table.Location(backend.Warehouse) + "/metadata/version-hint.text"
+	hintURL := backend.Table.Location(backend.Lakehouse) + "/metadata/version-hint.text"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hintURL, nil)
 	if err != nil {
 		return "", err

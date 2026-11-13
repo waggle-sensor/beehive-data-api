@@ -33,4 +33,4 @@ func (t TableIdentity) Name() string {
 	return t.name
 }
 func (t TableIdentity) Path() string                     { return t.Namespace() + "/" + t.Name() }
-func (t TableIdentity) Location(warehouse string) string { return warehouse + "/" + t.Path() }
+func (t TableIdentity) Location(lakehouse string) string { return lakehouse + "/" + t.Path() }
