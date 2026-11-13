@@ -145,7 +145,7 @@ Result closure stops renewal and cancels the query context, then closes the unde
 
 This lets the archiver publish and verify a day, activate its cold coverage, then drain old hot readers before deleting that day from Influx. Public response schemas are unchanged. See [configuration](configuration.md#dynamic-vs-static-cold-frontier) and the [archival design](https://github.com/seanshahkarami/sage-data-rework/blob/main/plans/12_dynamic_archival_service.md).
 
-The table identity is configured by `ICEBERG_NAMESPACE` and
-`ICEBERG_TABLE_NAME`, defaulting to `sage.observations`. Both the cold reader
+The table identity is configured by `COLD_NAMESPACE` and
+`COLD_TABLE_NAME`, defaulting to `sage.observations`. Both the cold reader
 and dynamic coordinator validate paths against that identity. These settings
 must match the loader; namespace changes are not automatic migrations.

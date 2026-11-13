@@ -15,8 +15,8 @@ Flags normally override environment defaults. An explicitly set empty environmen
 | `-influxdb.bucket` | `INFLUXDB_BUCKET` | empty | Default hot bucket; static requests can override it; dynamic requests must match it |
 | `-influxdb.timeout` | `INFLUXDB_TIMEOUT` | `15m` | Influx HTTP client duration; invalid syntax fails parsing |
 | `-cold.warehouse` | `COLD_WAREHOUSE` | empty | Warehouse base URL; nonempty enables tiered routing |
-| `-cold.namespace` | `ICEBERG_NAMESPACE` | `sage` | Iceberg namespace; ASCII identifier |
-| `-cold.table-name` | `ICEBERG_TABLE_NAME` | `observations` | Iceberg table name; ASCII identifier |
+| `-cold.namespace` | `COLD_NAMESPACE` | `sage` | Iceberg namespace; ASCII identifier |
+| `-cold.table-name` | `COLD_TABLE_NAME` | `observations` | Iceberg table name; ASCII identifier |
 | `-cold.async-threads` | `COLD_ASYNC_THREADS` | `8` | Integer from 1 through 256; checked when cold is enabled |
 | `-cold.read-ahead-depth` | `COLD_READ_AHEAD_DEPTH` | `-1` | `-1` automatic memory-budgeted lookahead, or `0` disabled; checked when cold is enabled |
 | `-tiered.staging-dir` | `TIERED_STAGING_DIR` | empty (OS temporary directory) | Parent directory for private per-request hot staging for aggregates and spanning head/tail; provision writable scratch space |
@@ -40,7 +40,7 @@ The Influx organization is fixed to `waggle`; there is no organization flag. The
 The border separates two half-open ranges: cold before the boundary and hot at or after it. In static mode no automatic border discovery or retention validation occurs. Operators must ensure the selected hot/cold stores have the intended coverage; the router does not deduplicate overlapping archives or fill gaps.
 
 The reader expects table metadata beneath
-`<COLD_WAREHOUSE>/<ICEBERG_NAMESPACE>/<ICEBERG_TABLE_NAME>/metadata/`;
+`<COLD_WAREHOUSE>/<COLD_NAMESPACE>/<COLD_TABLE_NAME>/metadata/`;
 with defaults this is `<COLD_WAREHOUSE>/sage/observations/metadata/`.
 Both static hint lookup and dynamic coordinator validation use this path.
 Set the namespace and table name to the same values as the hot-to-cold loader.
