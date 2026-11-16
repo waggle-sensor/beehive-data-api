@@ -11,6 +11,7 @@ Start with the [documentation index](docs/README.md).
 | Guide | Use it to |
 | --- | --- |
 | [API](docs/api.md) | Submit queries, decode responses, and consume live events |
+| [Known issues](docs/known-issues.md) | Understand accepted upstream limitations affecting query completeness |
 | [Configuration](docs/configuration.md) | Look up flags, environment variables, and defaults |
 | [Architecture](docs/architecture.md) | Understand packages, execution paths, and storage contracts |
 | [Operations](docs/operations.md) | Run the service, configure cold storage, and diagnose queries |

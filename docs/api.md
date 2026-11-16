@@ -159,6 +159,11 @@ Metadata becomes `meta.<key>` columns. The client retains nanosecond bounds and 
 
 Errors use plain text, not a structured JSON error envelope.
 
+Known upstream limitation: a Flux read spanning native value-type changes can
+silently omit stored observations even with HTTP 200 and no transport error.
+See [known issues](known-issues.md#flux-can-omit-observations-across-native-value-type-changes)
+for affected hot input, evidence and the decision to retain current API behavior.
+
 | Situation | Current behavior |
 | --- | --- |
 | Empty body, malformed JSON, unknown field, missing start, invalid filter key | HTTP 400 |

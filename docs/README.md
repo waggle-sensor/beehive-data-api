@@ -15,6 +15,7 @@ These guides describe the current Beehive Data API source. They do not imply tha
 ## Guides
 
 - [API](api.md): request fields, filters, tier-specific capabilities, Arrow/NDJSON, errors, SSE.
+- [Known issues](known-issues.md): upstream Flux completeness limitations and accepted behavior.
 - [Dynamic vs Static Cold Frontier](configuration.md#dynamic-vs-static-cold-frontier): border selection, snapshot pinning and renewable reader leases.
 - [Configuration](configuration.md): all startup flags and environment variables, defaults and fixed engine settings.
 - [Architecture](architecture.md): package boundaries, query execution, resource ownership and cold storage contracts.
